@@ -11,27 +11,36 @@ function buildValidEnv(overrides: Record<string, unknown> = {}): Record<string, 
     REDIS_URL: 'redis://localhost:6379',
     APP_SECRET: randomBytes(24).toString('hex'),
     ENCRYPTION_MASTER_KEY: randomBytes(32).toString('hex'),
+    JWT_ACCESS_SECRET: randomBytes(32).toString('hex'),
+    JWT_REFRESH_SECRET: randomBytes(32).toString('hex'),
     ...overrides,
   };
 }
 
 describe('validateEnv', () => {
-  it('parses valid configuration and coerces PORT to number', () => {
-    const raw = buildValidEnv();
+  it('parses valid configuration and coerces PORT and JWT TTLs to numbers', () => {
+    const raw = buildValidEnv({
+      JWT_ACCESS_TTL_SEC: '600',
+      JWT_REFRESH_TTL_SEC: '86400',
+    });
     const parsed = validateEnv(raw);
 
     expect(parsed.NODE_ENV).toBe('test');
     expect(parsed.PORT).toBe(4000);
     expect(parsed.POSTGRES_URL).toBe(raw['POSTGRES_URL']);
     expect(parsed.REDIS_URL).toBe('redis://localhost:6379');
+    expect(parsed.JWT_ACCESS_TTL_SEC).toBe(600);
+    expect(parsed.JWT_REFRESH_TTL_SEC).toBe(86400);
   });
 
-  it('applies defaults for NODE_ENV and PORT when omitted', () => {
+  it('applies defaults for NODE_ENV, PORT, and JWT TTLs when omitted', () => {
     const raw = buildValidEnv({ NODE_ENV: undefined, PORT: undefined });
     const parsed = validateEnv(raw);
 
     expect(parsed.NODE_ENV).toBe('development');
     expect(parsed.PORT).toBe(3000);
+    expect(parsed.JWT_ACCESS_TTL_SEC).toBe(900);
+    expect(parsed.JWT_REFRESH_TTL_SEC).toBe(604800);
   });
 
   it('accepts postgres:// and rediss:// scheme variants', () => {
@@ -66,12 +75,30 @@ describe('validateEnv', () => {
     );
   });
 
-  it('throws when APP_SECRET or ENCRYPTION_MASTER_KEY fails length/hex constraints', () => {
+  it('throws when APP_SECRET, ENCRYPTION_MASTER_KEY, or JWT secrets fail length/hex constraints', () => {
     expect(() => validateEnv(buildValidEnv({ APP_SECRET: 'too-short' }))).toThrow(
       /APP_SECRET/,
     );
     expect(() =>
       validateEnv(buildValidEnv({ ENCRYPTION_MASTER_KEY: 'not-64-hex-chars' })),
     ).toThrow(/ENCRYPTION_MASTER_KEY/);
+    expect(() => validateEnv(buildValidEnv({ JWT_ACCESS_SECRET: 'short' }))).toThrow(
+      /JWT_ACCESS_SECRET/,
+    );
+    expect(() => validateEnv(buildValidEnv({ JWT_REFRESH_SECRET: 'short' }))).toThrow(
+      /JWT_REFRESH_SECRET/,
+    );
+  });
+
+  it('throws when JWT_ACCESS_SECRET and JWT_REFRESH_SECRET are identical', () => {
+    const sharedSecret = randomBytes(32).toString('hex');
+    expect(() =>
+      validateEnv(
+        buildValidEnv({
+          JWT_ACCESS_SECRET: sharedSecret,
+          JWT_REFRESH_SECRET: sharedSecret,
+        }),
+      ),
+    ).toThrow(/JWT_ACCESS_SECRET and JWT_REFRESH_SECRET must be distinct secrets/);
   });
 });
