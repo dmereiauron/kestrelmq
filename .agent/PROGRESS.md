@@ -11,13 +11,13 @@
 - [x] `CryptoService` Unit Tests with 100% code coverage in Vitest
 
 ### Stage 2: Request Lifecycle, Auth, RBAC & API Keys
-- [ ] Custom Request Lifecycle setup (Middleware -> Guards -> Interceptors -> Pipes -> Filters)
-- [ ] Workspace & User models integration in Auth flow
-- [ ] JWT Authentication & Refresh Token rotation mechanism in Redis (with reuse detection)
-- [ ] `ApiKeyGuard` with Redis caching layer (SHA-256 hash lookup, 300s TTL)
-- [ ] `@Roles()` decorator & `RolesGuard` implementation for workspace-level permissions
-- [ ] Global `HttpExceptionFilter` adhering to RFC 9457 / RFC 7807 (Problem Details)
-- [ ] Global `LoggingInterceptor` with recursive key masking and WeakSet cycle protection
+- [x] Custom Request Lifecycle setup (Middleware -> Guards -> Interceptors -> Pipes -> Filters)
+- [x] Workspace & User models integration in Auth flow
+- [x] JWT Authentication & Refresh Token rotation mechanism in Redis (with reuse detection)
+- [x] `ApiKeyGuard` with Redis caching layer (SHA-256 hash lookup, 300s TTL)
+- [x] `@Roles()` decorator & `RolesGuard` implementation for workspace-level permissions
+- [x] Global `HttpExceptionFilter` adhering to RFC 9457 / RFC 7807 (Problem Details)
+- [x] Global `LoggingInterceptor` with recursive key masking and WeakSet cycle protection
 
 ### Stage 3: Strategy Pattern, Provider Adapters & Templating
 - [ ] Dynamic `ProviderFactory` setup using NestJS custom dynamic providers
@@ -69,6 +69,7 @@
 | ADL-003 | RFC 9457 Problem Details | Standardized error API output format across all services. | Approved |
 | ADL-004 | Prisma 7 Rust-Free ESM Client & Driver Adapter | Adopted Prisma 7.10 `prisma-client` ESM generator (`src/generated/prisma`), `prisma.config.ts`, `@prisma/adapter-pg` (`pg.Pool`), and native `partialIndexes` preview feature for partial unique idempotency index. | Approved |
 | ADL-005 | Key Separation & Canonical AES-256-GCM Layout | Enforced separate `APP_SECRET` (min 32 chars) and `ENCRYPTION_MASTER_KEY` (64 hex chars / 32B) in Zod v4 env validation; standardized `CryptoService` on `[IV (12B) \| AuthTag (16B) \| CipherText]` packed layout plus detached Prisma column helpers. | Approved |
+| ADL-006 | Atomic Redis Lua Refresh Token Rotation & Domain-Separated JWTs | Enforced distinct `JWT_ACCESS_SECRET` (15m, `type: 'access'`) and `JWT_REFRESH_SECRET` (7d, `type: 'refresh'`) in Zod v4 env validation, and implemented atomic single-roundtrip Redis `EVAL` Lua rotation on `auth:rt:family:{sid}` with OAuth 2.0 (RFC 9700) reuse detection that immediately revokes compromised session families. | Approved |
 
 ---
 
@@ -76,9 +77,9 @@
 This section is updated by the AI Agent after every successful execution session.
 
 - **Last Session Date:** 2026-11-26
-- **Active Stage:** Stage 2 (Stage 1 Completed)
-- **Completed Milestones:** Stage 1 complete — NestJS 12 ESM project initialized (`moduleResolution: "nodenext"`, `strict: true`), Zod v4 `env.validation.ts`, Docker Compose (`postgres:18-alpine` mounted at `/var/lib/postgresql` + `redis:8.2-alpine` with `noeviction` and healthchecks), full 12-model Prisma 7 schema with `20261126163717_init` migration applied to PostgreSQL 18, and `CryptoService` (AES-256-GCM AEAD, HMAC-SHA256 timestamped signatures, SHA-256) verified with 100% Vitest v8 coverage.
-- **Key Decisions Made:** Adopted Node.js ESM (`"type": "module"`), NestJS 12.6, TypeScript 6.0, Prisma 7.10 (`@prisma/adapter-pg`), Zod 4.6, Vitest 5.1 + `unplugin-swc`; isolated master key in ECMAScript `#masterKey` private field.
+- **Active Stage:** Stage 3 (Stages 1–2 Completed)
+- **Completed Milestones:** Stage 1 & Stage 2 complete — Global `RedisModule` (`ioredis` v6.1 with graceful `quit`/`disconnect` teardown), full NestJS 12 request lifecycle (`RequestContextMiddleware` -> Guards -> `LoggingInterceptor` with `WeakSet` cycle protection & recursive sensitive-key masking -> `ValidationPipe` -> RFC 9457 `HttpExceptionFilter`), `JwtAuthGuard`, `ApiKeyGuard` (`kmq_live_` SHA-256 lookup with `apikey:{hash}` 300s Redis Cache-Aside), `@Roles()` + hierarchical `RolesGuard` (`OWNER > ADMIN > VIEWER`), `AuthModule` (`register` with Argon2id, `login` with timing-safe dummy hash fallback, atomic Redis Lua `refresh` rotation with reuse detection, `logout`), and `WorkspacesModule` (`POST /v1/workspaces`, `POST /v1/workspaces/:id/members` with privilege-escalation guard, `POST /v1/workspaces/:id/api-keys`). Verified with `tsc --noEmit`, 13 Vitest suites (58 unit tests, ~97%+ statement coverage), and `nest build`.
+- **Key Decisions Made:** Used native ESM `@nestjs/jwt@^12.0.5` directly without CommonJS Passport wrappers; enforced cryptographic secret separation (`JWT_ACCESS_SECRET !== JWT_REFRESH_SECRET`) + token `type` claim discrimination; embedded `sid` (session family UUID) in Access JWTs so `POST /v1/auth/logout` revokes the active refresh family without requiring the refresh token in the request body.
 - **Known Blockers / Technical Debt:** Local host `~/.docker/config.json` references legacy `"credsStore": "desktop"` and lacks `cliPluginsExtraDirs` for Homebrew `docker-compose` (documented workaround for local CLI usage). Active shell Node is `v22.17.0` (`engines.node >= 22.12.0` configured alongside `@types/node@^26.6.7`).
 
 ---

@@ -31,6 +31,7 @@ export default defineConfig({
       exclude: [
         'src/**/*.spec.ts',
         'src/**/*.module.ts',
+        'src/**/*.interface.ts',
         'src/main.ts',
         'src/generated/**',
       ],
