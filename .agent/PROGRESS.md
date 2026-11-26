@@ -3,12 +3,12 @@
 ## Global Architecture Checklist
 
 ### Stage 1: Infrastructure, Database Schema & Cryptography
-- [ ] Node.js / NestJS project initialization with TypeScript strict mode & nodenext resolution
-- [ ] Environment validation using Zod (`env.validation.ts` validating POSTGRES_URL, REDIS_URL, APP_SECRET, PORT)
-- [ ] Docker Compose setup (PostgreSQL 18 alpine, Redis 8.2 alpine with healthchecks and volumes)
-- [ ] Prisma schema initialization (`schema.prisma` matching SPEC.md Section 4 with composite/partial indexes)
-- [ ] `CryptoService` implementation (AES-256-GCM AEAD encryption/decryption, HMAC-SHA256 signatures with timestamp)
-- [ ] `CryptoService` Unit Tests with 100% code coverage in Vitest
+- [x] Node.js / NestJS project initialization with TypeScript strict mode & nodenext resolution
+- [x] Environment validation using Zod (`env.validation.ts` validating POSTGRES_URL, REDIS_URL, APP_SECRET, PORT)
+- [x] Docker Compose setup (PostgreSQL 18 alpine, Redis 8.2 alpine with healthchecks and volumes)
+- [x] Prisma schema initialization (`schema.prisma` matching SPEC.md Section 4 with composite/partial indexes)
+- [x] `CryptoService` implementation (AES-256-GCM AEAD encryption/decryption, HMAC-SHA256 signatures with timestamp)
+- [x] `CryptoService` Unit Tests with 100% code coverage in Vitest
 
 ### Stage 2: Request Lifecycle, Auth, RBAC & API Keys
 - [ ] Custom Request Lifecycle setup (Middleware -> Guards -> Interceptors -> Pipes -> Filters)
@@ -67,17 +67,19 @@
 | ADL-001 | Separate API and Worker processes | Decoupled HTTP API from queue execution to allow independent scaling and prevent Worker failures from crashing API gateway. | Approved |
 | ADL-002 | Keyset Pagination for Deliveries | Avoided `OFFSET` in SQL queries to maintain O(1) performance on millions of delivery records. | Approved |
 | ADL-003 | RFC 9457 Problem Details | Standardized error API output format across all services. | Approved |
+| ADL-004 | Prisma 7 Rust-Free ESM Client & Driver Adapter | Adopted Prisma 7.10 `prisma-client` ESM generator (`src/generated/prisma`), `prisma.config.ts`, `@prisma/adapter-pg` (`pg.Pool`), and native `partialIndexes` preview feature for partial unique idempotency index. | Approved |
+| ADL-005 | Key Separation & Canonical AES-256-GCM Layout | Enforced separate `APP_SECRET` (min 32 chars) and `ENCRYPTION_MASTER_KEY` (64 hex chars / 32B) in Zod v4 env validation; standardized `CryptoService` on `[IV (12B) \| AuthTag (16B) \| CipherText]` packed layout plus detached Prisma column helpers. | Approved |
 
 ---
 
 ## Context Memory Buffer
 This section is updated by the AI Agent after every successful execution session.
 
-- **Last Session Date:** N/A
-- **Active Stage:** Stage 1
-- **Completed Milestones:** Project setup initiated.
-- **Key Decisions Made:** Adopted Node.js 26, NestJS 12, Prisma 7, PostgreSQL 18.
-- **Known Blockers / Technical Debt:** None.
+- **Last Session Date:** 2026-11-26
+- **Active Stage:** Stage 2 (Stage 1 Completed)
+- **Completed Milestones:** Stage 1 complete — NestJS 12 ESM project initialized (`moduleResolution: "nodenext"`, `strict: true`), Zod v4 `env.validation.ts`, Docker Compose (`postgres:18-alpine` mounted at `/var/lib/postgresql` + `redis:8.2-alpine` with `noeviction` and healthchecks), full 12-model Prisma 7 schema with `20261126163717_init` migration applied to PostgreSQL 18, and `CryptoService` (AES-256-GCM AEAD, HMAC-SHA256 timestamped signatures, SHA-256) verified with 100% Vitest v8 coverage.
+- **Key Decisions Made:** Adopted Node.js ESM (`"type": "module"`), NestJS 12.6, TypeScript 6.0, Prisma 7.10 (`@prisma/adapter-pg`), Zod 4.6, Vitest 5.1 + `unplugin-swc`; isolated master key in ECMAScript `#masterKey` private field.
+- **Known Blockers / Technical Debt:** Local host `~/.docker/config.json` references legacy `"credsStore": "desktop"` and lacks `cliPluginsExtraDirs` for Homebrew `docker-compose` (documented workaround for local CLI usage). Active shell Node is `v22.17.0` (`engines.node >= 22.12.0` configured alongside `@types/node@^26.6.7`).
 
 ---
 
