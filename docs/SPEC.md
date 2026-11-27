@@ -21,6 +21,7 @@
 - **Database & ORM:** PostgreSQL 18 + Prisma ORM 7 (ACID transactions, JSONB support, composite and partial indexes).
 - **Queues & Caching:** Redis 8.2 Extended + BullMQ 6 (v6.4+; delayed jobs, worker-level rate limiting, exponential backoff, DLQ).
 - **Validation & Documentation:** `class-validator`, `class-transformer`, `Zod` (strict runtime environment validation on startup), Swagger / OpenAPI (`@nestjs/swagger`).
+- **AI Agent Integration (MCP):** `@nestjs/mcp` + `@modelcontextprotocol/server` (official MCP TypeScript SDK v2; Streamable HTTP Model Context Protocol server for AI coding agents and operational assistants).
 - **Security:** Node.js `crypto` (`AES-256-GCM` for credential encryption, `HMAC-SHA256` for outbound webhook signatures, `SHA-256` for workspace API key hashing), `Argon2` for user password hashing.
 - **Testing & Infrastructure:** Vitest 5 (v5.1+), Testcontainers (ephemeral real Postgres and Redis containers in E2E tests), Docker (multi-stage build), Docker Compose.
 - **Compatibility Note:** `package.json` and `tsconfig.json` must explicitly enforce a consistent module resolution strategy (ESM `"type": "module"` with `moduleResolution: "nodenext"`) for seamless compatibility with NestJS 12, Prisma 7, and BullMQ 6.
@@ -229,7 +230,8 @@ Receiving servers can verify authenticity and prevent replay attacks by rejectin
 - `src/modules/events/`: Single event ingestion (`POST /v1/events`), fan-out orchestration, and streaming CSV bulk import (`POST /v1/events/bulk`).
 - `src/modules/deliveries/`: Cursor-based delivery logs, attempt inspection, `Replay`, and `Cancel`.
 - `src/modules/analytics/`: Aggregated delivery metrics with Redis Cache-Aside caching (60s TTL).
-- `src/workers/`: BullMQ background processors (`DeliveryProcessor`, `src/worker.ts`) with Graceful Shutdown hooks.
+- `src/modules/mcp/`: Official Model Context Protocol (MCP) server (`@nestjs/mcp` + `@modelcontextprotocol/server`) exposing workspace-isolated tools and resources over Streamable HTTP.
+- `src/workers/`: BullMQ background processors (`DeliveryProcessor`, `RetentionProcessor`, `src/worker.ts`) with Graceful Shutdown hooks.
 - `packages/sdk/`: Strongly typed TypeScript client SDK (`@kestrelmq/sdk`).
 
 ---
@@ -266,18 +268,43 @@ Receiving servers can verify authenticity and prevent replay attacks by rejectin
 | `POST` | `/v1/inbound-sources/:id/pause` | Access JWT | Pause forwarding (deployment buffer mode) | `200, 404` |
 | `POST` | `/v1/inbound-sources/:id/resume` | Access JWT | Resume forwarding buffered webhooks | `200, 404` |
 | `POST` | `/v1/inbound/:sourceSlug` | Public (HMAC) | Public inbound webhook receiver | `200, 401, 404` |
+| `POST / GET / DELETE` | `/mcp` | API Key | Model Context Protocol (MCP) Streamable HTTP endpoint (stateless; `GET`/`DELETE` → `405`) | `200, 202, 400, 401, 405, 429` |
 
 ---
 
-## 7. Demo Playground (Web UI) & Deployment Strategy
+## 7. Model Context Protocol (MCP) Server
 
-### 7.1. Web UI Playground Screens (`apps/web`, Next.js 16)
+### 7.1. Packages & Streamable HTTP Transport
+- **Stack:** Built with the official `@nestjs/mcp` module paired with `@modelcontextprotocol/server` (the official MCP TypeScript SDK v2 server package required by `@nestjs/mcp`).
+- **Process Boundary:** Mounted exclusively inside the HTTP API Gateway (`AppModule` via `src/main.ts`) over stateless Streamable HTTP at `/mcp` (outside the `/v1` global prefix): `POST` carries every JSON-RPC message; `GET` and `DELETE` (2025-era session streams) are answered `405` because no session state is kept between requests. Never mounted in `WorkerModule` (`src/worker.ts`), preserving strict API/Worker process decoupling and ensuring MCP tool invocations enqueue background jobs rather than making direct external provider HTTP calls.
+
+### 7.2. Authentication & Multi-Tenant Isolation
+- **Guard:** Protected by `ApiKeyGuard` (`Authorization: Bearer kmq_live_...` or `X-API-Key`).
+- **Workspace Resolution:** Incoming API keys are hashed with `SHA-256` and resolved via Redis/PostgreSQL to attach `workspaceId` to the request context. Every MCP `@Tool` execution and `@Resource` read derives its tenant scope strictly from this verified `workspaceId` (never from client-supplied arguments).
+
+### 7.3. MCP Tools (`@Tool`)
+1. **`send_event`** — Enqueues an outbound notification event via `IngestionService.ingestEvent` (accepting `event`, `payload`, optional `recipient`, `idempotencyKey`, and `deliverAt`), returning `eventId` and created `deliveryIds`.
+2. **`list_deliveries`** — Queries recent workspace deliveries via `DeliveriesService.listDeliveries` using high-performance keyset cursor pagination with optional `limit`, `cursor`, `status`, `eventName`, and `integrationId` filters.
+3. **`inspect_delivery`** — Fetches full delivery details alongside the ordered `delivery_attempts` audit timeline (with sensitive keys recursively masked via `maskSensitiveData`) via `DeliveriesService.getDeliveryById`.
+4. **`replay_delivery`** — Resets a delivery to `PENDING` (`nextRetryAt: null`) and re-enqueues a fresh BullMQ job via `DeliveriesService.replayDelivery` (`POST /v1/deliveries/:id/replay` semantics).
+5. **`get_analytics_summary`** — Returns workspace delivery metrics (`24h` | `7d` | `30d` window: total events, status counts, success rate %, and avg/p95 `durationMs`) via `AnalyticsService.getSummary` backed by 60s Redis Cache-Aside.
+6. **`toggle_inbound_source`** — Pauses (`pause`) or resumes (`resume`, draining buffered `PAUSED` deliveries smoothly at `max_rate_per_sec`) an inbound webhook source via `InboundService`.
+
+### 7.4. MCP Resources (`@Resource`)
+1. **`kestrelmq://schemas`** — Exposes registered workspace event names, validation modes (`DISABLED`, `WARN`, `STRICT`), extracted dot-path variables, and JSON Schemas via `EventSchemasService.listSchemas` so AI agents can inspect payload contracts before invoking `send_event`.
+2. **`kestrelmq://templates`** — Exposes available workspace notification templates and associated routing channels via `TemplatesService` so AI agents can discover template structure and variable placeholders.
+
+---
+
+## 8. Demo Playground (Web UI) & Deployment Strategy
+
+### 8.1. Web UI Playground Screens (`apps/web`, Next.js 16)
 1. **Provider Connections:** Form to add Mailgun, Telegram Bot Token, or Webhook URL with a `Test Connection` button.
 2. **Routing Rules & Schemas:** Bind events to integrations and templates, run `Infer Schema from Sample`, select validation modes (`DISABLED`, `WARN`, `STRICT`), and use `{{...}}` variable autocomplete.
 3. **Live Event Playground:** Interactive form to dispatch events with `deliverAt` delay, `Idempotency-Key` generation, and a "Simulate 500 Failure" toggle to demonstrate retries.
 4. **Live Delivery Logs:** Delivery table with statuses (`PENDING`, `RETRYING`, `DELIVERED`, `FAILED`, `PAUSED`), expandable `delivery_attempts` audit logs, and a manual `Replay` action.
 5. **Inbound Webhook Buffer (Deployment Simulation):** `Pause Endpoint` button, burst dispatch of simulated Stripe webhooks, and `Resume` to observe rate-limited queue draining.
 
-### 7.2. Deployment Strategy
+### 8.2. Deployment Strategy
 - **Docker Compose (VPS):** `api`, `worker`, `postgres:18-alpine`, `redis:8.2-alpine`, `web` behind Caddy/Nginx with automatic HTTPS (Let's Encrypt).
 - **Public Demo Access:** Pre-seeded demo workspace (one-click login via startup seed script), Swagger UI (`/docs`), and a built-in mock webhook receiver.

@@ -1,0 +1,93 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: kestrelmq-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      # PostgreSQL 18 mounts parent /var/lib/postgresql (PGDATA=/var/lib/postgresql/18/docker)
+      - kestrelmq_postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  redis:
+    image: redis:8.2-alpine
+    container_name: kestrelmq-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "noeviction"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - kestrelmq_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 3s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kestrelmq:latest
+    container_name: kestrelmq-api
+    profiles: ["prod", "full"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      POSTGRES_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}?schema=public
+      REDIS_URL: redis://redis:6379
+      APP_SECRET: ${APP_SECRET:?APP_SECRET is required}
+      ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:?ENCRYPTION_MASTER_KEY is required}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required}
+      JWT_ACCESS_TTL_SEC: ${JWT_ACCESS_TTL_SEC:-900}
+      JWT_REFRESH_TTL_SEC: ${JWT_REFRESH_TTL_SEC:-604800}
+    ports:
+      - "${PORT:-3000}:3000"
+    command: ["node", "dist/main.js"]
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kestrelmq:latest
+    container_name: kestrelmq-worker
+    profiles: ["prod", "full"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      POSTGRES_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}?schema=public
+      REDIS_URL: redis://redis:6379
+      APP_SECRET: ${APP_SECRET:?APP_SECRET is required}
+      ENCRYPTION_MASTER_KEY: ${ENCRYPTION_MASTER_KEY:?ENCRYPTION_MASTER_KEY is required}
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?JWT_ACCESS_SECRET is required}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required}
+      JWT_ACCESS_TTL_SEC: ${JWT_ACCESS_TTL_SEC:-900}
+      JWT_REFRESH_TTL_SEC: ${JWT_REFRESH_TTL_SEC:-604800}
+    command: ["node", "dist/worker.js"]
+
+volumes:
+  kestrelmq_postgres_data:
+  kestrelmq_redis_data:
