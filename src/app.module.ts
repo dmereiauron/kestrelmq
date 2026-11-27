@@ -14,6 +14,11 @@ import { PrismaModule } from './common/prisma/prisma.module.js';
 import { RedisModule } from './common/redis/redis.module.js';
 import { validateEnv } from './config/env.validation.js';
 import { AuthModule } from './modules/auth/auth.module.js';
+import { IntegrationsModule } from './modules/integrations/integrations.module.js';
+import { ProvidersModule } from './modules/providers/providers.module.js';
+import { RulesModule } from './modules/rules/rules.module.js';
+import { EventSchemasModule } from './modules/schemas/event-schemas.module.js';
+import { TemplatesModule } from './modules/templates/templates.module.js';
 import { WorkspacesModule } from './modules/workspaces/workspaces.module.js';
 
 @Module({
@@ -27,6 +32,11 @@ import { WorkspacesModule } from './modules/workspaces/workspaces.module.js';
     CryptoModule,
     AuthModule,
     WorkspacesModule,
+    ProvidersModule,
+    IntegrationsModule,
+    TemplatesModule,
+    RulesModule,
+    EventSchemasModule,
   ],
   providers: [
     {
