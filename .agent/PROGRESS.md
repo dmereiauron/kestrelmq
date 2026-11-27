@@ -20,16 +20,16 @@
 - [x] Global `LoggingInterceptor` with recursive key masking and WeakSet cycle protection
 
 ### Stage 3: Strategy Pattern, Provider Adapters & Templating
-- [ ] Dynamic `ProviderFactory` setup using NestJS custom dynamic providers
-- [ ] Abstract `NotificationProvider` interface definition
-- [ ] `WebhookAdapter` implementation (Outbound HTTP POST, AbortSignal timeout 5000ms, HMAC-SHA256 headers)
-- [ ] `TelegramAdapter` implementation (Telegram Bot API integration with HTML parsing mode)
-- [ ] `MailgunAdapter` implementation (Mailgun REST API integration)
-- [ ] Handlebars template compilation engine (`TemplatesService` with disabled prototype access)
-- [ ] Rules evaluation engine (`RulesService` with JsonLogic matching)
-- [ ] `POST /v1/integrations/:id/test` connectivity ping endpoint
-- [ ] `EventSchemasModule`: Sample-to-Schema inference & Ajv runtime validation (DISABLED / WARN / STRICT modes)
-- [ ] Safe nested dot-path resolver utility (`getByPath`) with prototype pollution prevention (`__proto__`, `constructor` checks)
+- [x] Dynamic `ProviderFactory` setup using NestJS custom dynamic providers
+- [x] Abstract `NotificationProvider` interface definition
+- [x] `WebhookAdapter` implementation (Outbound HTTP POST, AbortSignal timeout 10000ms per SPEC.md §3.3, HMAC-SHA256 headers)
+- [x] `TelegramAdapter` implementation (Telegram Bot API integration with HTML parsing mode)
+- [x] `MailgunAdapter` implementation (Mailgun REST API integration)
+- [x] Handlebars template compilation engine (`TemplatesService` with disabled prototype access & BYOT fallback)
+- [x] Rules evaluation engine (`RulesService` with wildcard matching, JsonLogic evaluation & dynamic target resolution)
+- [x] `POST /v1/integrations/:id/test` connectivity ping endpoint
+- [x] `EventSchemasModule`: Sample-to-Schema inference & Ajv runtime validation (DISABLED / WARN / STRICT modes)
+- [x] Safe nested dot-path resolver utility (`getByPath`) with prototype pollution prevention (`__proto__`, `constructor` checks)
 
 ### Stage 4: Ingestion, Idempotency, BullMQ Queues & Workers
 - [ ] `POST /v1/events` single event ingestion endpoint
@@ -70,6 +70,7 @@
 | ADL-004 | Prisma 7 Rust-Free ESM Client & Driver Adapter | Adopted Prisma 7.10 `prisma-client` ESM generator (`src/generated/prisma`), `prisma.config.ts`, `@prisma/adapter-pg` (`pg.Pool`), and native `partialIndexes` preview feature for partial unique idempotency index. | Approved |
 | ADL-005 | Key Separation & Canonical AES-256-GCM Layout | Enforced separate `APP_SECRET` (min 32 chars) and `ENCRYPTION_MASTER_KEY` (64 hex chars / 32B) in Zod v4 env validation; standardized `CryptoService` on `[IV (12B) \| AuthTag (16B) \| CipherText]` packed layout plus detached Prisma column helpers. | Approved |
 | ADL-006 | Atomic Redis Lua Refresh Token Rotation & Domain-Separated JWTs | Enforced distinct `JWT_ACCESS_SECRET` (15m, `type: 'access'`) and `JWT_REFRESH_SECRET` (7d, `type: 'refresh'`) in Zod v4 env validation, and implemented atomic single-roundtrip Redis `EVAL` Lua rotation on `auth:rt:family:{sid}` with OAuth 2.0 (RFC 9700) reuse detection that immediately revokes compromised session families. | Approved |
+| ADL-007 | Strategy Provider Adapters, Prototype-Safe Templating/JsonLogic & Ajv Schema Engine | Standardized `WebhookAdapter`, `TelegramAdapter`, and `MailgunAdapter` on `AbortSignal.timeout(10_000)` (`SPEC.md` §3.3) with typed `ProviderDeliveryError` (`retryable` classification for Stage 4 BullMQ backoff vs fatal 4xx) and secret redaction; hardened `getByPath`, isolated `Handlebars.create()` (`allowProtoPropertiesByDefault: false`, `allowProtoMethodsByDefault: false` + null-prototype context cloning), and `json-logic-js` AST inspection against `__proto__`/`constructor`/`prototype` traversal while preserving `SPEC.md` `routing_rules` schema; integrated `Ajv` v8 + `ajv-formats` (`DISABLED` / `WARN` / `STRICT`) with RFC 9457 `HttpExceptionFilter` error arrays. | Approved |
 
 ---
 
@@ -77,9 +78,9 @@
 This section is updated by the AI Agent after every successful execution session.
 
 - **Last Session Date:** 2026-11-26
-- **Active Stage:** Stage 3 (Stages 1–2 Completed)
-- **Completed Milestones:** Stage 1 & Stage 2 complete — Global `RedisModule` (`ioredis` v6.1 with graceful `quit`/`disconnect` teardown), full NestJS 12 request lifecycle (`RequestContextMiddleware` -> Guards -> `LoggingInterceptor` with `WeakSet` cycle protection & recursive sensitive-key masking -> `ValidationPipe` -> RFC 9457 `HttpExceptionFilter`), `JwtAuthGuard`, `ApiKeyGuard` (`kmq_live_` SHA-256 lookup with `apikey:{hash}` 300s Redis Cache-Aside), `@Roles()` + hierarchical `RolesGuard` (`OWNER > ADMIN > VIEWER`), `AuthModule` (`register` with Argon2id, `login` with timing-safe dummy hash fallback, atomic Redis Lua `refresh` rotation with reuse detection, `logout`), and `WorkspacesModule` (`POST /v1/workspaces`, `POST /v1/workspaces/:id/members` with privilege-escalation guard, `POST /v1/workspaces/:id/api-keys`). Verified with `tsc --noEmit`, 13 Vitest suites (58 unit tests, ~97%+ statement coverage), and `nest build`.
-- **Key Decisions Made:** Used native ESM `@nestjs/jwt@^12.0.5` directly without CommonJS Passport wrappers; enforced cryptographic secret separation (`JWT_ACCESS_SECRET !== JWT_REFRESH_SECRET`) + token `type` claim discrimination; embedded `sid` (session family UUID) in Access JWTs so `POST /v1/auth/logout` revokes the active refresh family without requiring the refresh token in the request body.
+- **Active Stage:** Stage 4 (Stages 1–3 Completed)
+- **Completed Milestones:** Stages 1–3 complete — Added prototype-safe `getByPath` (`Object.hasOwn` + forbidden segment & canonical array index guards), `@CurrentWorkspaceId()` decorator, and `RolesGuard` resource `:id` hardening; implemented `ProvidersModule` (`NotificationProvider`, dynamic `ProviderFactory`, `WebhookAdapter` with `v1=` HMAC-SHA256 & reserved header protection, `TelegramAdapter` with HTML mode & `getMe` test fallback, `MailgunAdapter` with US/EU Basic Auth & domain check fallback, all enforcing `AbortSignal.timeout(10_000)`), `IntegrationsModule` (`POST`/`GET`/`DELETE` with `CryptoService.encryptDetached` & zero secret exposure + live `POST /v1/integrations/:id/test` mapping upstream failures to `502 Bad Gateway`), `TemplatesModule` (CRUD + isolated Handlebars compiler with disabled prototype access + BYOT `payload.subject`/`html`/`text` resolution), `RulesModule` (CRUD with cross-tenant FK checks + `*`/prefix/exact matching, prototype-safe `json-logic-js` evaluation, and dynamic `getByPath` recipient fallback), and `EventSchemasModule` (`inferJsonSchema`, `extractDotPaths` UI autocomplete, and Ajv `DISABLED`/`WARN`/`STRICT` validation). Verified with `tsc --noEmit`, 22 Vitest suites (91 unit tests, 93.20% statement / 96.96% function coverage), and `nest build`.
+- **Key Decisions Made:** Used native ESM named `Ajv` import + zero-`any` CJS default unwrappers for `ajv-formats` and `json-logic-js` under TypeScript 6 `nodenext`; exposed `IntegrationsService.decryptIntegrationCredentials()`, `TemplatesService.resolveContent()`, `RulesService.findMatchingRules()` / `resolveRecipientTarget()`, and `EventSchemasService.validateEventPayload()` as clean building blocks for Stage 4 ingestion (`EventsService`) and background worker execution (`DeliveryProcessor`).
 - **Known Blockers / Technical Debt:** Local host `~/.docker/config.json` references legacy `"credsStore": "desktop"` and lacks `cliPluginsExtraDirs` for Homebrew `docker-compose` (documented workaround for local CLI usage). Active shell Node is `v22.17.0` (`engines.node >= 22.12.0` configured alongside `@types/node@^26.6.7`).
 
 ---

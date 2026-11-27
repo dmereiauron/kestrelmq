@@ -127,6 +127,6 @@ export class RolesGuard implements CanActivate {
       return fromQuery;
     }
 
-    return params ? readStringValue(params['id']) : undefined;
+    return undefined;
   }
 }

@@ -134,5 +134,29 @@ describe('RolesGuard', () => {
     });
     await expect(guard.canActivate(headerCtx.context)).resolves.toBe(true);
     expect(headerCtx.request.workspaceId).toBe(wsId);
+
+    // Body and query resolution
+    const bodyWsId = randomUUID();
+    const bodyCtx = buildContext({
+      userId: randomUUID(),
+      body: { workspaceId: bodyWsId },
+    });
+    await expect(guard.canActivate(bodyCtx.context)).resolves.toBe(true);
+    expect(bodyCtx.request.workspaceId).toBe(bodyWsId);
+
+    const queryWsId = randomUUID();
+    const queryCtx = buildContext({
+      userId: randomUUID(),
+      query: { workspaceId: queryWsId },
+    });
+    await expect(guard.canActivate(queryCtx.context)).resolves.toBe(true);
+    expect(queryCtx.request.workspaceId).toBe(queryWsId);
+
+    // Resource :id route without @WorkspaceIdParam('id') must NOT mistake params.id for workspaceId -> 400
+    const resourceIdCtx = buildContext({
+      userId: randomUUID(),
+      params: { id: randomUUID() },
+    });
+    await expect(guard.canActivate(resourceIdCtx.context)).rejects.toThrow(BadRequestException);
   });
 });
