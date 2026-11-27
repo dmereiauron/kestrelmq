@@ -26,6 +26,10 @@ export const envSchema = z
     }),
     JWT_ACCESS_TTL_SEC: z.coerce.number().int().positive().default(900),
     JWT_REFRESH_TTL_SEC: z.coerce.number().int().positive().default(604800),
+    RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+    RATE_LIMIT_FREE_MAX: z.coerce.number().int().positive().default(60),
+    RATE_LIMIT_PRO_MAX: z.coerce.number().int().positive().default(600),
+    RATE_LIMIT_ENTERPRISE_MAX: z.coerce.number().int().positive().default(3_000),
   })
   .refine((env) => env.JWT_ACCESS_SECRET !== env.JWT_REFRESH_SECRET, {
     path: ['JWT_REFRESH_SECRET'],

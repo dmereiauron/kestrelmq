@@ -33,7 +33,7 @@ describe('validateEnv', () => {
     expect(parsed.JWT_REFRESH_TTL_SEC).toBe(86400);
   });
 
-  it('applies defaults for NODE_ENV, PORT, and JWT TTLs when omitted', () => {
+  it('applies defaults for NODE_ENV, PORT, JWT TTLs, and rate limit quotas when omitted', () => {
     const raw = buildValidEnv({ NODE_ENV: undefined, PORT: undefined });
     const parsed = validateEnv(raw);
 
@@ -41,6 +41,25 @@ describe('validateEnv', () => {
     expect(parsed.PORT).toBe(3000);
     expect(parsed.JWT_ACCESS_TTL_SEC).toBe(900);
     expect(parsed.JWT_REFRESH_TTL_SEC).toBe(604800);
+    expect(parsed.RATE_LIMIT_WINDOW_MS).toBe(60_000);
+    expect(parsed.RATE_LIMIT_FREE_MAX).toBe(60);
+    expect(parsed.RATE_LIMIT_PRO_MAX).toBe(600);
+    expect(parsed.RATE_LIMIT_ENTERPRISE_MAX).toBe(3_000);
+  });
+
+  it('coerces custom rate limit environment variables when provided', () => {
+    const raw = buildValidEnv({
+      RATE_LIMIT_WINDOW_MS: '10000',
+      RATE_LIMIT_FREE_MAX: '25',
+      RATE_LIMIT_PRO_MAX: '250',
+      RATE_LIMIT_ENTERPRISE_MAX: '2500',
+    });
+    const parsed = validateEnv(raw);
+
+    expect(parsed.RATE_LIMIT_WINDOW_MS).toBe(10_000);
+    expect(parsed.RATE_LIMIT_FREE_MAX).toBe(25);
+    expect(parsed.RATE_LIMIT_PRO_MAX).toBe(250);
+    expect(parsed.RATE_LIMIT_ENTERPRISE_MAX).toBe(2_500);
   });
 
   it('accepts postgres:// and rediss:// scheme variants', () => {

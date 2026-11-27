@@ -21,6 +21,7 @@ import {
 } from '../../generated/prisma/enums.js';
 import { type MatchedRoutingRuleRecord, RulesService } from '../rules/rules.service.js';
 import type { EventSchemasService } from '../schemas/event-schemas.service.js';
+import { BulkEventsService } from './bulk-events.service.js';
 import { IngestEventDto } from './dto/ingest-event.dto.js';
 import { EventsController } from './events.controller.js';
 import { EVENT_IDEMPOTENCY_TTL_SEC, IngestionService } from './ingestion.service.js';
@@ -98,7 +99,13 @@ describe('IngestionService & EventsController', () => {
       rulesService,
       deliveriesQueue,
     );
-    controller = new EventsController(service);
+    const bulkEventsService = new BulkEventsService(
+      prismaService,
+      eventSchemasService,
+      rulesService,
+      deliveriesQueue,
+    );
+    controller = new EventsController(service, bulkEventsService);
   });
 
   it('ingests an event, fans out matching routing rules transactionally, enqueues BullMQ jobs, and responds 202 Accepted', async () => {

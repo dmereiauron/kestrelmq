@@ -8,6 +8,7 @@ import {
   DELIVERIES_DLQ_QUEUE,
   DELIVERIES_QUEUE,
   KESTREL_BACKOFF_TYPE,
+  MAINTENANCE_QUEUE,
 } from './queue.constants.js';
 
 export function buildBullConnectionOptions(redisUrl: string): ConnectionOptions {
@@ -60,6 +61,18 @@ export function buildBullConnectionOptions(redisUrl: string): ConnectionOptions 
         defaultJobOptions: {
           removeOnComplete: false,
           removeOnFail: false,
+        },
+      },
+      {
+        name: MAINTENANCE_QUEUE,
+        defaultJobOptions: {
+          attempts: 3,
+          removeOnComplete: {
+            count: 30,
+          },
+          removeOnFail: {
+            count: 100,
+          },
         },
       },
     ),
