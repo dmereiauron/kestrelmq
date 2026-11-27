@@ -40,7 +40,6 @@ services:
       context: .
       dockerfile: Dockerfile
     image: kestrelmq:latest
-    container_name: kestrelmq-api
     profiles: ["prod", "full"]
     restart: unless-stopped
     depends_on:
@@ -48,6 +47,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # Loads optional tuning (RATE_LIMIT_*, BACKOFF_SCALE_FACTOR, ...); `environment` below takes precedence.
+    env_file: .env
     environment:
       NODE_ENV: production
       PORT: 3000
@@ -68,7 +69,6 @@ services:
       context: .
       dockerfile: Dockerfile
     image: kestrelmq:latest
-    container_name: kestrelmq-worker
     profiles: ["prod", "full"]
     restart: unless-stopped
     depends_on:
@@ -76,6 +76,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # Loads optional tuning (RATE_LIMIT_*, BACKOFF_SCALE_FACTOR, ...); `environment` below takes precedence.
+    env_file: .env
     environment:
       NODE_ENV: production
       POSTGRES_URL: postgresql://${POSTGRES_USER:?POSTGRES_USER is required}:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/${POSTGRES_DB:?POSTGRES_DB is required}?schema=public
