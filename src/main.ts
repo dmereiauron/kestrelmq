@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module.js';
+import { setupSwagger } from './common/swagger/swagger.config.js';
 import type { EnvConfig } from './config/env.validation.js';
 
 async function bootstrap(): Promise<void> {
@@ -12,6 +13,7 @@ async function bootstrap(): Promise<void> {
 
   app.enableShutdownHooks();
   app.setGlobalPrefix('v1');
+  setupSwagger(app);
 
   const configService = app.get<ConfigService<EnvConfig, true>>(ConfigService);
   const port = configService.get('PORT', { infer: true });

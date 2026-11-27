@@ -17,6 +17,7 @@ import { RetentionProcessor } from './retention.processor.js';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      ignoreEnvFile: process.env['NODE_ENV'] === 'test',
       validate: validateEnv,
     }),
     JwtModule.register({

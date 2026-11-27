@@ -23,13 +23,14 @@ export default defineConfig({
     globals: false,
     environment: 'node',
     root: './',
-    include: ['src/**/*.spec.ts'],
+    include: ['src/**/*.spec.ts', 'sdk/src/**/*.spec.ts'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json-summary', 'lcov'],
-      include: ['src/**/*.ts'],
+      include: ['src/**/*.ts', 'sdk/src/**/*.ts'],
       exclude: [
         'src/**/*.spec.ts',
+        'sdk/src/**/*.spec.ts',
         'src/**/*.module.ts',
         'src/**/*.interface.ts',
         'src/main.ts',
