@@ -32,17 +32,17 @@
 - [x] Safe nested dot-path resolver utility (`getByPath`) with prototype pollution prevention (`__proto__`, `constructor` checks)
 
 ### Stage 4: Ingestion, Idempotency, BullMQ Queues & Workers
-- [ ] `POST /v1/events` single event ingestion endpoint
-- [ ] Enable `rawBody: true` in NestJS application setup (`src/main.ts`)
-- [ ] `InboundModule`: CRUD for `inbound_sources`, public endpoint `POST /v1/inbound/:sourceSlug` with HMAC verification using `req.rawBody`
-- [ ] Inbound Pause/Resume endpoints (`POST /v1/inbound-sources/:id/pause` & `/resume`) with BullMQ rate-limited delivery
-- [ ] Support `PAUSED` delivery status in `DeliveryProcessor` worker and database schema
-- [ ] `IdempotencyInterceptor` using Redis `SET key PROCESSING NX EX 86400` pattern
-- [ ] Standalone Worker process entry point (`src/worker.ts`)
-- [ ] BullMQ Producers and Queue configuration (`events-queue`, `deliveries-queue`)
-- [ ] `DeliveryProcessor` worker with error classification (Fatal 4xx vs Retryable 429/5xx/Network) & exponential backoff with jitter
-- [ ] Audit trail recording into `delivery_attempts` database table
-- [ ] Graceful shutdown hooks (`SIGTERM` / `SIGINT`) in Worker process to complete active jobs
+- [x] `POST /v1/events` single event ingestion endpoint
+- [x] Enable `rawBody: true` in NestJS application setup (`src/main.ts`)
+- [x] `InboundModule`: CRUD for `inbound_sources`, public endpoint `POST /v1/inbound/:sourceSlug` with HMAC verification using `req.rawBody`
+- [x] Inbound Pause/Resume endpoints (`POST /v1/inbound-sources/:id/pause` & `/resume`) with BullMQ rate-limited delivery
+- [x] Support `PAUSED` delivery status in `DeliveryProcessor` worker and database schema
+- [x] `IdempotencyInterceptor` using Redis `SET key PROCESSING NX EX 86400` pattern
+- [x] Standalone Worker process entry point (`src/worker.ts`)
+- [x] BullMQ Producers and Queue configuration (`events-queue`, `deliveries-queue`)
+- [x] `DeliveryProcessor` worker with error classification (Fatal 4xx vs Retryable 429/5xx/Network) & exponential backoff with jitter
+- [x] Audit trail recording into `delivery_attempts` database table
+- [x] Graceful shutdown hooks (`SIGTERM` / `SIGINT`) in Worker process to complete active jobs
 
 ### Stage 5: Streams, Cursor Pagination, Rate Limiting & Analytics
 - [ ] `POST /v1/events/bulk` endpoint with Node.js Stream parsing (`stream.pipeline`, `Transform`, backpressure handling)
@@ -71,16 +71,17 @@
 | ADL-005 | Key Separation & Canonical AES-256-GCM Layout | Enforced separate `APP_SECRET` (min 32 chars) and `ENCRYPTION_MASTER_KEY` (64 hex chars / 32B) in Zod v4 env validation; standardized `CryptoService` on `[IV (12B) \| AuthTag (16B) \| CipherText]` packed layout plus detached Prisma column helpers. | Approved |
 | ADL-006 | Atomic Redis Lua Refresh Token Rotation & Domain-Separated JWTs | Enforced distinct `JWT_ACCESS_SECRET` (15m, `type: 'access'`) and `JWT_REFRESH_SECRET` (7d, `type: 'refresh'`) in Zod v4 env validation, and implemented atomic single-roundtrip Redis `EVAL` Lua rotation on `auth:rt:family:{sid}` with OAuth 2.0 (RFC 9700) reuse detection that immediately revokes compromised session families. | Approved |
 | ADL-007 | Strategy Provider Adapters, Prototype-Safe Templating/JsonLogic & Ajv Schema Engine | Standardized `WebhookAdapter`, `TelegramAdapter`, and `MailgunAdapter` on `AbortSignal.timeout(10_000)` (`SPEC.md` §3.3) with typed `ProviderDeliveryError` (`retryable` classification for Stage 4 BullMQ backoff vs fatal 4xx) and secret redaction; hardened `getByPath`, isolated `Handlebars.create()` (`allowProtoPropertiesByDefault: false`, `allowProtoMethodsByDefault: false` + null-prototype context cloning), and `json-logic-js` AST inspection against `__proto__`/`constructor`/`prototype` traversal while preserving `SPEC.md` `routing_rules` schema; integrated `Ajv` v8 + `ajv-formats` (`DISABLED` / `WARN` / `STRICT`) with RFC 9457 `HttpExceptionFilter` error arrays. | Approved |
+| ADL-008 | Dual-Tier Atomic Idempotency, RawBody Constant-Time Inbound Gateway & BullMQ 6 Worker Isolation | Extracted producer-only `QueueModule` (`deliveries` + `deliveries-dlq`, `maxRetriesPerRequest: null`) so `AppModule` (`src/main.ts`) never mounts `@Processor` consumers, while `WorkerModule` (`src/worker.ts`) runs via `NestFactory.createApplicationContext` with idempotent `SIGTERM`/`SIGINT` drain; paired Redis `SET NX EX 86400` (`PROCESSING` lock + compare-and-delete Lua cleanup) with PostgreSQL partial unique index `(workspace_id, idempotency_key)` `P2002` recovery; implemented 5 raw-body `timingSafeEqual` inbound verifiers + atomic Redis ZSET Lua sliding-window rate limiting + two-layer `Pause`/`Resume` pacing (staggered BullMQ delays + worker `DelayedError` egress shaping); mapped fatal errors to BullMQ `UnrecoverableError` (`-1` backoff) and transient errors to `10s -> 1m -> 5m -> 30m -> 2h` jittered backoff. | Approved |
 
 ---
 
 ## Context Memory Buffer
 This section is updated by the AI Agent after every successful execution session.
 
-- **Last Session Date:** 2026-11-26
-- **Active Stage:** Stage 4 (Stages 1–3 Completed)
-- **Completed Milestones:** Stages 1–3 complete — Added prototype-safe `getByPath` (`Object.hasOwn` + forbidden segment & canonical array index guards), `@CurrentWorkspaceId()` decorator, and `RolesGuard` resource `:id` hardening; implemented `ProvidersModule` (`NotificationProvider`, dynamic `ProviderFactory`, `WebhookAdapter` with `v1=` HMAC-SHA256 & reserved header protection, `TelegramAdapter` with HTML mode & `getMe` test fallback, `MailgunAdapter` with US/EU Basic Auth & domain check fallback, all enforcing `AbortSignal.timeout(10_000)`), `IntegrationsModule` (`POST`/`GET`/`DELETE` with `CryptoService.encryptDetached` & zero secret exposure + live `POST /v1/integrations/:id/test` mapping upstream failures to `502 Bad Gateway`), `TemplatesModule` (CRUD + isolated Handlebars compiler with disabled prototype access + BYOT `payload.subject`/`html`/`text` resolution), `RulesModule` (CRUD with cross-tenant FK checks + `*`/prefix/exact matching, prototype-safe `json-logic-js` evaluation, and dynamic `getByPath` recipient fallback), and `EventSchemasModule` (`inferJsonSchema`, `extractDotPaths` UI autocomplete, and Ajv `DISABLED`/`WARN`/`STRICT` validation). Verified with `tsc --noEmit`, 22 Vitest suites (91 unit tests, 93.20% statement / 96.96% function coverage), and `nest build`.
-- **Key Decisions Made:** Used native ESM named `Ajv` import + zero-`any` CJS default unwrappers for `ajv-formats` and `json-logic-js` under TypeScript 6 `nodenext`; exposed `IntegrationsService.decryptIntegrationCredentials()`, `TemplatesService.resolveContent()`, `RulesService.findMatchingRules()` / `resolveRecipientTarget()`, and `EventSchemasService.validateEventPayload()` as clean building blocks for Stage 4 ingestion (`EventsService`) and background worker execution (`DeliveryProcessor`).
+- **Last Session Date:** 2026-11-27
+- **Active Stage:** Stage 5 (Stages 1–4 Completed)
+- **Completed Milestones:** Stages 1–4 complete — Installed `bullmq` v6 & `@nestjs/bullmq` v12; added producer-only `QueueModule` (`deliveries` + `deliveries-dlq`), atomic Redis `SET NX EX`, compare-and-delete Lua, and ZSET sliding-window rate-limiter Lua primitives in `RedisService`, plus reusable `IdempotencyInterceptor`; implemented `EventsModule` (`IngestionModule`) with `POST /v1/events` (`202 Accepted` / `200 OK` on idempotent replay / `400 Bad Request` on `STRICT` schema failure, `WARN` persistence, rule fan-out transaction, `deliverAt` delayed scheduling, and `P2002` partial unique index fallback); implemented `InboundModule` (`POST`/`GET`/`DELETE` + `/pause` & `/resume` with `CryptoService.encryptDetached`, public `POST /v1/inbound/:sourceSlug` with `STRIPE`, `GITHUB`, `SHOPIFY`, `CUSTOM_HMAC`, and `NONE` constant-time `rawBody` verifiers, `429` + `Retry-After` rate limiting, and FIFO staggered drain on resume); implemented `WorkerModule` (`DeliveryProcessor` with credential decryption, template/BYOT resolution, inbound `WebhookAdapter` forwarding, masked `DeliveryAttempt` audit rows, `10s -> 1m -> 5m -> 30m -> 2h` jittered backoff, and `UnrecoverableError` fatal handling) and standalone `src/worker.ts` entrypoint (`start:worker`, `start:worker:dev`, `start:worker:prod`). Verified with `tsc --noEmit`, 28 Vitest suites (117 unit tests, 92.43% statement / 96.83% function coverage), and `npm run build` (`dist/main.js` & `dist/worker.js`).
+- **Key Decisions Made:** Reused `RedisService.checkSlidingWindowRateLimit()` (atomic ZSET Lua script) for both inbound ingress throttling and per-source worker egress shaping (ready for Stage 5 global `RateLimitGuard`); used unique resume batch `jobId` suffixes on `/resume` to avoid BullMQ deduplicating previously paused job IDs while `DeliveryProcessor` enforces DB terminal-state idempotency (`DELIVERED`/`CANCELED`/`PAUSED`).
 - **Known Blockers / Technical Debt:** Local host `~/.docker/config.json` references legacy `"credsStore": "desktop"` and lacks `cliPluginsExtraDirs` for Homebrew `docker-compose` (documented workaround for local CLI usage). Active shell Node is `v22.17.0` (`engines.node >= 22.12.0` configured alongside `@types/node@^26.6.7`).
 
 ---

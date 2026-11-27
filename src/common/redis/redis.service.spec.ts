@@ -1,6 +1,8 @@
 import { ConfigService } from '@nestjs/config';
+import { randomBytes } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EnvConfig } from '../../config/env.validation.js';
+import { buildBullConnectionOptions } from '../queue/queue.module.js';
 import { RedisService } from './redis.service.js';
 
 describe('RedisService', () => {
@@ -77,5 +79,70 @@ describe('RedisService', () => {
     quitSpy.mockRejectedValueOnce(new Error('Connection closed'));
     await service.onModuleDestroy();
     expect(disconnectSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('supports atomic setNxEx, compareAndDel, and sliding-window ZSET rate limiting', async () => {
+    const client = service.getClient();
+    const setSpy = vi.spyOn(client, 'set');
+    const evalSpy = vi.spyOn(client, 'eval');
+
+    setSpy.mockResolvedValueOnce('OK');
+    expect(await service.setNxEx('idem:1', 86_400, 'PROCESSING:abc')).toBe(true);
+    expect(setSpy).toHaveBeenCalledWith('idem:1', 'PROCESSING:abc', 'EX', 86_400, 'NX');
+
+    setSpy.mockImplementationOnce((async () => null) as unknown as typeof client.set);
+    expect(await service.setNxEx('idem:1', 86_400, 'PROCESSING:def')).toBe(false);
+
+    evalSpy.mockResolvedValueOnce(1);
+    expect(await service.compareAndDel('idem:1', 'PROCESSING:abc')).toBe(true);
+
+    evalSpy.mockResolvedValueOnce(0);
+    expect(await service.compareAndDel('idem:1', 'PROCESSING:wrong')).toBe(false);
+
+    evalSpy.mockResolvedValueOnce([1, 3, 0]);
+    const allowed = await service.checkSlidingWindowRateLimit('rl:src:1', 10, 1_000, 1_700_000_000_000, 'm1');
+    expect(allowed).toEqual({
+      allowed: true,
+      currentCount: 3,
+      retryAfterMs: 0,
+    });
+
+    evalSpy.mockResolvedValueOnce([0, 10, 420]);
+    const throttled = await service.checkSlidingWindowRateLimit('rl:src:1', 10, 1_000, 1_700_000_000_580, 'm2');
+    expect(throttled).toEqual({
+      allowed: false,
+      currentCount: 10,
+      retryAfterMs: 420,
+    });
+
+    evalSpy.mockResolvedValueOnce('unexpected');
+    await expect(service.checkSlidingWindowRateLimit('rl:src:1', 10)).rejects.toThrow(
+      'Unexpected response from Redis sliding-window rate limiter script',
+    );
+
+    client.disconnect();
+  });
+
+  it('parses redis:// and rediss:// connection URLs for BullMQ workers', () => {
+    const plain = buildBullConnectionOptions('redis://localhost:6380/2');
+    expect(plain).toEqual({
+      host: 'localhost',
+      port: 6380,
+      db: 2,
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false,
+    });
+
+    const dynamicAuth = randomBytes(8).toString('hex');
+    const tlsOpts = buildBullConnectionOptions(`rediss://default:${dynamicAuth}@cache.internal:6379`);
+    expect(tlsOpts).toEqual({
+      host: 'cache.internal',
+      port: 6379,
+      username: 'default',
+      password: dynamicAuth,
+      tls: {},
+      maxRetriesPerRequest: null,
+      enableReadyCheck: false,
+    });
   });
 });

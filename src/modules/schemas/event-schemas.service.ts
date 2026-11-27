@@ -207,6 +207,14 @@ export class EventSchemasService {
     }
   }
 
+  async validatePayload(
+    workspaceId: string,
+    eventName: string,
+    payload: Record<string, unknown>,
+  ): Promise<PayloadValidationResult> {
+    return this.validateEventPayload(workspaceId, eventName, payload);
+  }
+
   async validateEventPayload(
     workspaceId: string,
     eventName: string,

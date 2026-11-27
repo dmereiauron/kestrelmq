@@ -208,10 +208,10 @@ describe('EventSchemasService, inferJsonSchema & extractDotPaths', () => {
       additionalProperties: false,
     };
 
-    // 1. No schema configured -> DISABLED pass-through
+    // 1. No schema configured -> DISABLED pass-through (via validatePayload alias)
     schemaFindUniqueMock.mockResolvedValueOnce(null);
     await expect(
-      service.validateEventPayload(workspaceId, 'unregistered.event', { anything: 1 }),
+      service.validatePayload(workspaceId, 'unregistered.event', { anything: 1 }),
     ).resolves.toEqual({
       valid: true,
       mode: SchemaValidationMode.DISABLED,
