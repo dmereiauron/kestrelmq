@@ -39,17 +39,18 @@
 - [x] Support `PAUSED` delivery status in `DeliveryProcessor` worker and database schema
 - [x] `IdempotencyInterceptor` using Redis `SET key PROCESSING NX EX 86400` pattern
 - [x] Standalone Worker process entry point (`src/worker.ts`)
-- [x] BullMQ Producers and Queue configuration (`events-queue`, `deliveries-queue`)
+- [x] BullMQ Producers and Queue configuration (`deliveries`, `deliveries-dlq`, `maintenance`)
 - [x] `DeliveryProcessor` worker with error classification (Fatal 4xx vs Retryable 429/5xx/Network) & exponential backoff with jitter
 - [x] Audit trail recording into `delivery_attempts` database table
 - [x] Graceful shutdown hooks (`SIGTERM` / `SIGINT`) in Worker process to complete active jobs
 
 ### Stage 5: Streams, Cursor Pagination, Rate Limiting & Analytics
-- [ ] `POST /v1/events/bulk` endpoint with Node.js Stream parsing (`stream.pipeline`, `Transform`, backpressure handling)
-- [ ] High-performance Cursor-based (Keyset) Pagination for `DeliveriesService`
-- [ ] Replay and Cancellation endpoints (`POST /v1/deliveries/:id/replay`, `POST /v1/deliveries/:id/cancel`)
-- [ ] Redis Sliding Window Rate Limiting Guard backed by Redis ZSET
-- [ ] `AnalyticsService` with Cache-Aside aggregation pattern and 60s TTL
+- [x] `POST /v1/events/bulk` endpoint with Node.js Stream parsing (`stream.pipeline`, `Transform`, backpressure handling)
+- [x] High-performance Cursor-based (Keyset) Pagination for `DeliveriesService`
+- [x] Replay and Cancellation endpoints (`POST /v1/deliveries/:id/replay`, `POST /v1/deliveries/:id/cancel`)
+- [x] Redis Sliding Window Rate Limiting Guard backed by Redis ZSET
+- [x] `AnalyticsService` with Cache-Aside aggregation pattern and 60s TTL
+- [x] Plan-aware Data Retention repeatable job (`RetentionProcessor` with daily `cleanup-delivery-attempts` scheduler on `maintenance` queue: `FREE` 7d, `PRO` 30d, `ENTERPRISE` 90d)
 
 ### Stage 6: E2E Testing, Typed SDK, OpenAPI & Production Docker
 - [ ] E2E integration tests using Testcontainers (dynamic Postgres 18 + Redis 8.2 containers)
@@ -58,6 +59,14 @@
 - [ ] Complete OpenAPI / Swagger setup (`/docs` route with `x-api-key` security scheme)
 - [ ] Production Multi-stage `Dockerfile` (Node 26 Alpine, non-root `USER node`, separate API/Worker entrypoints)
 - [ ] Final `README.md` update
+
+### Stage 7: Official NestJS MCP Server (`@nestjs/mcp`)
+- [ ] `McpModule` setup (`@nestjs/mcp` + `@modelcontextprotocol/sdk`) over Streamable HTTP (`POST/GET/DELETE /mcp`) mounted in `AppModule` only (excluded from `WorkerModule`)
+- [ ] `ApiKeyGuard` (`Authorization: Bearer kmq_live_...`) workspace resolution and strict multi-tenant isolation on `/mcp`
+- [ ] MCP Tools (`@Tool`): `send_event`, `list_deliveries`, `inspect_delivery`, `replay_delivery`, `get_analytics_summary`, and `toggle_inbound_source`
+- [ ] MCP Resources (`@Resource`): `kestrelmq://schemas` (`EventSchemasService`) and `kestrelmq://templates` (`TemplatesService`)
+- [ ] Vitest unit test suites (`.spec.ts`) for MCP tools, resources, and workspace isolation
+- [ ] `README.md` MCP client setup instructions (Claude Code & Cursor)
 
 ---
 
@@ -72,6 +81,8 @@
 | ADL-006 | Atomic Redis Lua Refresh Token Rotation & Domain-Separated JWTs | Enforced distinct `JWT_ACCESS_SECRET` (15m, `type: 'access'`) and `JWT_REFRESH_SECRET` (7d, `type: 'refresh'`) in Zod v4 env validation, and implemented atomic single-roundtrip Redis `EVAL` Lua rotation on `auth:rt:family:{sid}` with OAuth 2.0 (RFC 9700) reuse detection that immediately revokes compromised session families. | Approved |
 | ADL-007 | Strategy Provider Adapters, Prototype-Safe Templating/JsonLogic & Ajv Schema Engine | Standardized `WebhookAdapter`, `TelegramAdapter`, and `MailgunAdapter` on `AbortSignal.timeout(10_000)` (`SPEC.md` §3.3) with typed `ProviderDeliveryError` (`retryable` classification for Stage 4 BullMQ backoff vs fatal 4xx) and secret redaction; hardened `getByPath`, isolated `Handlebars.create()` (`allowProtoPropertiesByDefault: false`, `allowProtoMethodsByDefault: false` + null-prototype context cloning), and `json-logic-js` AST inspection against `__proto__`/`constructor`/`prototype` traversal while preserving `SPEC.md` `routing_rules` schema; integrated `Ajv` v8 + `ajv-formats` (`DISABLED` / `WARN` / `STRICT`) with RFC 9457 `HttpExceptionFilter` error arrays. | Approved |
 | ADL-008 | Dual-Tier Atomic Idempotency, RawBody Constant-Time Inbound Gateway & BullMQ 6 Worker Isolation | Extracted producer-only `QueueModule` (`deliveries` + `deliveries-dlq`, `maxRetriesPerRequest: null`) so `AppModule` (`src/main.ts`) never mounts `@Processor` consumers, while `WorkerModule` (`src/worker.ts`) runs via `NestFactory.createApplicationContext` with idempotent `SIGTERM`/`SIGINT` drain; paired Redis `SET NX EX 86400` (`PROCESSING` lock + compare-and-delete Lua cleanup) with PostgreSQL partial unique index `(workspace_id, idempotency_key)` `P2002` recovery; implemented 5 raw-body `timingSafeEqual` inbound verifiers + atomic Redis ZSET Lua sliding-window rate limiting + two-layer `Pause`/`Resume` pacing (staggered BullMQ delays + worker `DelayedError` egress shaping); mapped fatal errors to BullMQ `UnrecoverableError` (`-1` backoff) and transient errors to `10s -> 1m -> 5m -> 30m -> 2h` jittered backoff. | Approved |
+| ADL-009 | Backpressure-Driven CSV Stream Ingestion, Keyset Cursor Pagination, Stampede-Guarded Cache-Aside Analytics & Bounded Retention Purging | Built `POST /v1/events/bulk` using `busboy` + `stream.pipeline` + RFC 4180 `CsvParserStream` (`Transform` in `readableObjectMode`) feeding an `objectMode` `Writable` sink that flushes `500`-row PostgreSQL `createMany` transactions and BullMQ `addBulk` enqueues before releasing stream callbacks for end-to-end TCP backpressure; enforced zero-`OFFSET` `(createdAt DESC, id DESC)` keyset pagination (`take: limit + 1`) with Base64URL cursors, replay with unique BullMQ `jobId` + cumulative retry budget (`attemptCount + maxAttempts`), and atomic `updateMany` cancellation; added plan-aware ZSET `RateLimitGuard` (`FREE`/`PRO`/`ENTERPRISE` with Redis plan caching), `AnalyticsService` (`PERCENTILE_CONT(0.95)`, `60s` Redis Cache-Aside + `SET NX EX` stampede lock), and isolated `maintenance` queue `RetentionProcessor` (`upsertJobScheduler` daily `0 3 * * *` purging `delivery_attempts` in bounded `1,000`-row batches per plan). | Approved |
+| ADL-010 | Official NestJS MCP Server (`@nestjs/mcp`) & API-Key Tenant Isolation | Adopted `@nestjs/mcp` + `@modelcontextprotocol/sdk` over Streamable HTTP (`/mcp`) in `AppModule` only (excluded from `WorkerModule`) gated by `ApiKeyGuard` (`kmq_live_...` -> `workspaceId`) to expose tenant-isolated operational `@Tool`s (`send_event`, `list_deliveries`, `inspect_delivery`, `replay_delivery`, `get_analytics_summary`, `toggle_inbound_source`) and discovery `@Resource`s (`kestrelmq://schemas`, `kestrelmq://templates`) reusing existing domain services with `maskSensitiveData` redaction and zero direct outbound HTTP calls. | Approved |
 
 ---
 
@@ -79,9 +90,9 @@
 This section is updated by the AI Agent after every successful execution session.
 
 - **Last Session Date:** 2026-11-27
-- **Active Stage:** Stage 5 (Stages 1–4 Completed)
-- **Completed Milestones:** Stages 1–4 complete — Installed `bullmq` v6 & `@nestjs/bullmq` v12; added producer-only `QueueModule` (`deliveries` + `deliveries-dlq`), atomic Redis `SET NX EX`, compare-and-delete Lua, and ZSET sliding-window rate-limiter Lua primitives in `RedisService`, plus reusable `IdempotencyInterceptor`; implemented `EventsModule` (`IngestionModule`) with `POST /v1/events` (`202 Accepted` / `200 OK` on idempotent replay / `400 Bad Request` on `STRICT` schema failure, `WARN` persistence, rule fan-out transaction, `deliverAt` delayed scheduling, and `P2002` partial unique index fallback); implemented `InboundModule` (`POST`/`GET`/`DELETE` + `/pause` & `/resume` with `CryptoService.encryptDetached`, public `POST /v1/inbound/:sourceSlug` with `STRIPE`, `GITHUB`, `SHOPIFY`, `CUSTOM_HMAC`, and `NONE` constant-time `rawBody` verifiers, `429` + `Retry-After` rate limiting, and FIFO staggered drain on resume); implemented `WorkerModule` (`DeliveryProcessor` with credential decryption, template/BYOT resolution, inbound `WebhookAdapter` forwarding, masked `DeliveryAttempt` audit rows, `10s -> 1m -> 5m -> 30m -> 2h` jittered backoff, and `UnrecoverableError` fatal handling) and standalone `src/worker.ts` entrypoint (`start:worker`, `start:worker:dev`, `start:worker:prod`). Verified with `tsc --noEmit`, 28 Vitest suites (117 unit tests, 92.43% statement / 96.83% function coverage), and `npm run build` (`dist/main.js` & `dist/worker.js`).
-- **Key Decisions Made:** Reused `RedisService.checkSlidingWindowRateLimit()` (atomic ZSET Lua script) for both inbound ingress throttling and per-source worker egress shaping (ready for Stage 5 global `RateLimitGuard`); used unique resume batch `jobId` suffixes on `/resume` to avoid BullMQ deduplicating previously paused job IDs while `DeliveryProcessor` enforces DB terminal-state idempotency (`DELIVERED`/`CANCELED`/`PAUSED`).
+- **Active Stage:** Stage 6 (Stages 1–5 Completed)
+- **Completed Milestones:** Stages 1–5 complete — Implemented `RateLimitGuard` (`FREE`/`PRO`/`ENTERPRISE` quotas cached in Redis, atomic ZSET sliding-window enforcement, `X-RateLimit-Limit`/`X-RateLimit-Remaining`/`Retry-After` headers) wired on `POST /v1/events` and `POST /v1/events/bulk`; implemented streaming CSV bulk ingestion (`CsvParserStream` RFC 4180 state machine + `BulkEventsService` `busboy`/`stream.pipeline` backpressure pipeline, `500`-row chunked transactions, rule fan-out caching, `413`/`400` safety limits, and per-row error summaries); implemented `DeliveriesModule` (`GET /v1/deliveries` zero-`OFFSET` keyset cursor pagination, `GET /v1/deliveries/:id` with `maskSensitiveData` audit redaction, `POST /v1/deliveries/:id/replay`, and `POST /v1/deliveries/:id/cancel`); implemented `AnalyticsModule` (`GET /v1/analytics/summary` over `24h`/`7d`/`30d` with `PERCENTILE_CONT(0.95)` latency metrics, `60s` Redis Cache-Aside, and `SET NX EX` stampede protection); implemented `RetentionProcessor` on dedicated `maintenance` BullMQ queue (`cleanup-delivery-attempts` daily `upsertJobScheduler` purging `FREE` 7d / `PRO` 30d / `ENTERPRISE` 90d expired `delivery_attempts` in bounded `1,000`-row batches). Verified with `npx tsc --noEmit`, 34 Vitest suites (145 unit tests passing), and `npm run build` (`dist/main.js` & `dist/worker.js`).
+- **Key Decisions Made:** Deferred `busboy` teardown (`queueMicrotask`) upon file-size `limit` events so `busboy`'s synchronous multipart boundary parser completes cleanly before unpiping; isolated `cleanup-delivery-attempts` onto a dedicated `maintenance` queue (`concurrency: 1`) via BullMQ v6 `upsertJobScheduler` so daily batch retention never contends with `deliveries` workers; used unique `${deliveryId}-replay-${uuid}` job IDs and `attemptCount + maxAttempts` retry budgets on Replay to avoid BullMQ deduplication against retained failed jobs (`removeOnFail: false`).
 - **Known Blockers / Technical Debt:** Local host `~/.docker/config.json` references legacy `"credsStore": "desktop"` and lacks `cliPluginsExtraDirs` for Homebrew `docker-compose` (documented workaround for local CLI usage). Active shell Node is `v22.17.0` (`engines.node >= 22.12.0` configured alongside `@types/node@^26.6.7`).
 
 ---

@@ -11,6 +11,7 @@ import { ProvidersModule } from '../providers/providers.module.js';
 import { RulesModule } from '../rules/rules.module.js';
 import { TemplatesModule } from '../templates/templates.module.js';
 import { DeliveryProcessor } from './delivery.processor.js';
+import { RetentionProcessor } from './retention.processor.js';
 
 @Module({
   imports: [
@@ -30,7 +31,7 @@ import { DeliveryProcessor } from './delivery.processor.js';
     TemplatesModule,
     RulesModule,
   ],
-  providers: [DeliveryProcessor],
-  exports: [DeliveryProcessor],
+  providers: [DeliveryProcessor, RetentionProcessor],
+  exports: [DeliveryProcessor, RetentionProcessor],
 })
 export class WorkerModule {}

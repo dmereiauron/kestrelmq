@@ -14,7 +14,9 @@ import { PrismaModule } from './common/prisma/prisma.module.js';
 import { QueueModule } from './common/queue/queue.module.js';
 import { RedisModule } from './common/redis/redis.module.js';
 import { validateEnv } from './config/env.validation.js';
+import { AnalyticsModule } from './modules/analytics/analytics.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
+import { DeliveriesModule } from './modules/deliveries/deliveries.module.js';
 import { EventsModule } from './modules/events/events.module.js';
 import { InboundModule } from './modules/inbound/inbound.module.js';
 import { IntegrationsModule } from './modules/integrations/integrations.module.js';
@@ -42,6 +44,8 @@ import { WorkspacesModule } from './modules/workspaces/workspaces.module.js';
     RulesModule,
     EventSchemasModule,
     EventsModule,
+    DeliveriesModule,
+    AnalyticsModule,
     InboundModule,
   ],
   providers: [
