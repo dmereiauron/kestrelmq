@@ -7,6 +7,7 @@ import { CryptoService } from '../crypto/crypto.service.js';
 import type { AuthenticatedRequest } from '../interfaces/authenticated-request.interface.js';
 import type { PrismaService } from '../prisma/prisma.service.js';
 import type { RedisService } from '../redis/redis.service.js';
+import { createMcpCallFixture } from '../../modules/mcp/testing/mcp-context.fixture.js';
 import { ApiKeyGuard } from './api-key.guard.js';
 
 function createHttpContext(headers: Record<string, string | string[] | undefined>): {
@@ -15,6 +16,7 @@ function createHttpContext(headers: Record<string, string | string[] | undefined
 } {
   const request = { headers } as unknown as AuthenticatedRequest;
   const context = {
+    getType: () => 'http',
     switchToHttp: () => ({
       getRequest: () => request,
     }),
@@ -150,5 +152,67 @@ describe('ApiKeyGuard', () => {
       guard.canActivate(createHttpContext({ 'x-api-key': revokedKey }).context),
     ).rejects.toThrow(UnauthorizedException);
     expect(redisSetExMock).not.toHaveBeenCalled();
+  });
+
+  describe('MCP calls', () => {
+    it('authenticates an MCP tool call from the underlying HTTP request headers', async () => {
+      const rawKey = `kmq_live_${randomBytes(24).toString('hex')}`;
+      const keyId = randomUUID();
+      const workspaceId = randomUUID();
+      redisGetMock.mockResolvedValue(JSON.stringify({ id: keyId, workspaceId }));
+
+      const { executionContext, request } = createMcpCallFixture({
+        name: 'send_event',
+        request: { headers: { authorization: `Bearer ${rawKey}` } },
+      });
+
+      await expect(guard.canActivate(executionContext)).resolves.toBe(true);
+      expect(redisGetMock).toHaveBeenCalledWith(`apikey:${cryptoService.hashSha256(rawKey)}`);
+      expect(request.workspaceId).toBe(workspaceId);
+      expect(request.apiKey).toEqual({ id: keyId, workspaceId });
+    });
+
+    it('skips a second lookup when the endpoint-level pass already resolved the same request', async () => {
+      const workspaceId = randomUUID();
+      const { executionContext } = createMcpCallFixture({
+        request: { headers: {}, workspaceId, apiKey: { id: randomUUID(), workspaceId } },
+      });
+
+      await expect(guard.canActivate(executionContext)).resolves.toBe(true);
+      expect(redisGetMock).not.toHaveBeenCalled();
+      expect(findUniqueMock).not.toHaveBeenCalled();
+    });
+
+    it('does not trust a workspaceId on the request without a matching resolved API key', async () => {
+      const { executionContext } = createMcpCallFixture({
+        request: { headers: {}, workspaceId: randomUUID() },
+      });
+
+      await expect(guard.canActivate(executionContext)).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('rejects a revoked key on an MCP call with 401', async () => {
+      const rawKey = `kmq_live_${randomBytes(24).toString('hex')}`;
+      redisGetMock.mockResolvedValue(null);
+      findUniqueMock.mockResolvedValue({
+        id: randomUUID(),
+        workspaceId: randomUUID(),
+        revokedAt: new Date(),
+      });
+
+      const { executionContext, request } = createMcpCallFixture({
+        request: { headers: { 'x-api-key': rawKey } },
+      });
+
+      await expect(guard.canActivate(executionContext)).rejects.toThrow(UnauthorizedException);
+      expect(request.workspaceId).toBeUndefined();
+    });
+
+    it('rejects MCP calls without an HTTP request (stdio)', async () => {
+      const { executionContext, mcpContext } = createMcpCallFixture();
+      Object.defineProperty(mcpContext, 'request', { value: undefined });
+
+      await expect(guard.canActivate(executionContext)).rejects.toThrow(UnauthorizedException);
+    });
   });
 });

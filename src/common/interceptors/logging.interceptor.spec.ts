@@ -7,6 +7,7 @@ import {
 import { randomBytes } from 'node:crypto';
 import { firstValueFrom, of, throwError } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createMcpCallFixture } from '../../modules/mcp/testing/mcp-context.fixture.js';
 import { LoggingInterceptor } from './logging.interceptor.js';
 
 function createHttpContext(options: {
@@ -145,5 +146,49 @@ describe('LoggingInterceptor', () => {
     const parsed = JSON.parse(warnSpy.mock.calls[0]?.[0] as string) as Record<string, unknown>;
     expect(parsed['statusCode']).toBe(403);
     expect(typeof parsed['durationMs']).toBe('number');
+  });
+
+  it('logs one masked line per MCP call with name, workspace and outcome, without the result', async () => {
+    const logSpy = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => {});
+    const interceptor = new LoggingInterceptor();
+    const rawSecret = randomBytes(16).toString('hex');
+    const { executionContext } = createMcpCallFixture({
+      name: 'send_event',
+      input: { event: 'order.paid', payload: { token: rawSecret } },
+      request: { requestId: 'req-mcp-7', workspaceId: 'ws-1' },
+    });
+    const handler: CallHandler = { handle: () => of({ secretResult: rawSecret }) };
+
+    await firstValueFrom(interceptor.intercept(executionContext, handler));
+
+    expect(logSpy).toHaveBeenCalledOnce();
+    const logged = logSpy.mock.calls[0]?.[0] as string;
+    expect(logged).not.toContain(rawSecret);
+    const parsed = JSON.parse(logged) as Record<string, unknown>;
+    expect(parsed).toMatchObject({
+      requestId: 'req-mcp-7',
+      kind: 'tool',
+      name: 'send_event',
+      workspaceId: 'ws-1',
+      outcome: 'ok',
+      input: { event: 'order.paid', payload: { token: '[REDACTED]' } },
+    });
+    expect(parsed).not.toHaveProperty('response');
+  });
+
+  it('logs a warning with outcome error when an MCP call fails', async () => {
+    const warnSpy = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => {});
+    const interceptor = new LoggingInterceptor();
+    const { executionContext } = createMcpCallFixture({ name: 'replay_delivery' });
+    const handler: CallHandler = {
+      handle: () => throwError(() => new ForbiddenException('nope')),
+    };
+
+    await expect(firstValueFrom(interceptor.intercept(executionContext, handler))).rejects.toThrow(
+      ForbiddenException,
+    );
+    const parsed = JSON.parse(warnSpy.mock.calls[0]?.[0] as string) as Record<string, unknown>;
+    expect(parsed['outcome']).toBe('error');
+    expect(parsed['name']).toBe('replay_delivery');
   });
 });

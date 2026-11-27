@@ -36,6 +36,7 @@ export default defineConfig({
         'src/main.ts',
         'src/worker.ts',
         'src/generated/**',
+        'src/**/testing/**',
       ],
     },
   },

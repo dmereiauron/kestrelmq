@@ -21,7 +21,7 @@
 - **Database & ORM:** PostgreSQL 18 + Prisma ORM 7 (ACID transactions, JSONB support, composite and partial indexes).
 - **Queues & Caching:** Redis 8.2 Extended + BullMQ 6 (v6.4+; delayed jobs, worker-level rate limiting, exponential backoff, DLQ).
 - **Validation & Documentation:** `class-validator`, `class-transformer`, `Zod` (strict runtime environment validation on startup), Swagger / OpenAPI (`@nestjs/swagger`).
-- **AI Agent Integration (MCP):** `@nestjs/mcp` + `@modelcontextprotocol/sdk` (Streamable HTTP Model Context Protocol server for AI coding agents and operational assistants).
+- **AI Agent Integration (MCP):** `@nestjs/mcp` + `@modelcontextprotocol/server` (official MCP TypeScript SDK v2; Streamable HTTP Model Context Protocol server for AI coding agents and operational assistants).
 - **Security:** Node.js `crypto` (`AES-256-GCM` for credential encryption, `HMAC-SHA256` for outbound webhook signatures, `SHA-256` for workspace API key hashing), `Argon2` for user password hashing.
 - **Testing & Infrastructure:** Vitest 5 (v5.1+), Testcontainers (ephemeral real Postgres and Redis containers in E2E tests), Docker (multi-stage build), Docker Compose.
 - **Compatibility Note:** `package.json` and `tsconfig.json` must explicitly enforce a consistent module resolution strategy (ESM `"type": "module"` with `moduleResolution: "nodenext"`) for seamless compatibility with NestJS 12, Prisma 7, and BullMQ 6.
@@ -230,7 +230,7 @@ Receiving servers can verify authenticity and prevent replay attacks by rejectin
 - `src/modules/events/`: Single event ingestion (`POST /v1/events`), fan-out orchestration, and streaming CSV bulk import (`POST /v1/events/bulk`).
 - `src/modules/deliveries/`: Cursor-based delivery logs, attempt inspection, `Replay`, and `Cancel`.
 - `src/modules/analytics/`: Aggregated delivery metrics with Redis Cache-Aside caching (60s TTL).
-- `src/modules/mcp/`: Official Model Context Protocol (MCP) server (`@nestjs/mcp` + `@modelcontextprotocol/sdk`) exposing workspace-isolated tools and resources over Streamable HTTP.
+- `src/modules/mcp/`: Official Model Context Protocol (MCP) server (`@nestjs/mcp` + `@modelcontextprotocol/server`) exposing workspace-isolated tools and resources over Streamable HTTP.
 - `src/workers/`: BullMQ background processors (`DeliveryProcessor`, `RetentionProcessor`, `src/worker.ts`) with Graceful Shutdown hooks.
 - `packages/sdk/`: Strongly typed TypeScript client SDK (`@kestrelmq/sdk`).
 
@@ -268,15 +268,15 @@ Receiving servers can verify authenticity and prevent replay attacks by rejectin
 | `POST` | `/v1/inbound-sources/:id/pause` | Access JWT | Pause forwarding (deployment buffer mode) | `200, 404` |
 | `POST` | `/v1/inbound-sources/:id/resume` | Access JWT | Resume forwarding buffered webhooks | `200, 404` |
 | `POST` | `/v1/inbound/:sourceSlug` | Public (HMAC) | Public inbound webhook receiver | `200, 401, 404` |
-| `POST / GET / DELETE` | `/mcp` | API Key | Model Context Protocol (MCP) Streamable HTTP endpoint | `200, 202, 400, 401` |
+| `POST / GET / DELETE` | `/mcp` | API Key | Model Context Protocol (MCP) Streamable HTTP endpoint (stateless; `GET`/`DELETE` → `405`) | `200, 202, 400, 401, 405, 429` |
 
 ---
 
 ## 7. Model Context Protocol (MCP) Server
 
 ### 7.1. Packages & Streamable HTTP Transport
-- **Stack:** Built with the official `@nestjs/mcp` module paired with `@modelcontextprotocol/sdk`.
-- **Process Boundary:** Mounted exclusively inside the HTTP API Gateway (`AppModule` via `src/main.ts`) over Streamable HTTP (`POST`, `GET`, and `DELETE /mcp`) using stateless or workspace-scoped sessions. Never mounted in `WorkerModule` (`src/worker.ts`), preserving strict API/Worker process decoupling and ensuring MCP tool invocations enqueue background jobs rather than making direct external provider HTTP calls.
+- **Stack:** Built with the official `@nestjs/mcp` module paired with `@modelcontextprotocol/server` (the official MCP TypeScript SDK v2 server package required by `@nestjs/mcp`).
+- **Process Boundary:** Mounted exclusively inside the HTTP API Gateway (`AppModule` via `src/main.ts`) over stateless Streamable HTTP at `/mcp` (outside the `/v1` global prefix): `POST` carries every JSON-RPC message; `GET` and `DELETE` (2025-era session streams) are answered `405` because no session state is kept between requests. Never mounted in `WorkerModule` (`src/worker.ts`), preserving strict API/Worker process decoupling and ensuring MCP tool invocations enqueue background jobs rather than making direct external provider HTTP calls.
 
 ### 7.2. Authentication & Multi-Tenant Isolation
 - **Guard:** Protected by `ApiKeyGuard` (`Authorization: Bearer kmq_live_...` or `X-API-Key`).

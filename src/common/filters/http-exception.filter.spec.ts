@@ -2,9 +2,12 @@ import {
   type ArgumentsHost,
   BadRequestException,
   HttpException,
+  Logger,
+  NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createMcpCallFixture } from '../../modules/mcp/testing/mcp-context.fixture.js';
 import { HttpExceptionFilter, type ProblemDetails } from './http-exception.filter.js';
 
 function createMockHost(url = '/v1/auth/login') {
@@ -34,6 +37,7 @@ function createMockHost(url = '/v1/auth/login') {
   };
 
   const host = {
+    getType: () => 'http',
     switchToHttp: () => ({
       getRequest: () => request,
       getResponse: () => response,
@@ -121,5 +125,41 @@ describe('HttpExceptionFilter (RFC 9457)', () => {
     expect(body?.status).toBe(500);
     expect(body?.detail).toBe('An unexpected internal server error occurred');
     expect(body?.detail).not.toContain('SELECT');
+  });
+
+  describe('MCP calls', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('rethrows HttpExceptions on an MCP host without writing an HTTP response', () => {
+      const errorSpy = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+      const filter = new HttpExceptionFilter();
+      const { executionContext } = createMcpCallFixture({ name: 'inspect_delivery' });
+      const exception = new NotFoundException('Delivery not found');
+
+      expect(() => filter.catch(exception, executionContext)).toThrow(exception);
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    it('logs unexpected MCP errors masked, then rethrows them unchanged', () => {
+      const errorSpy = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+      const filter = new HttpExceptionFilter();
+      const { executionContext } = createMcpCallFixture({
+        name: 'send_event',
+        request: { requestId: 'req-mcp-1' },
+      });
+      const exception = Object.assign(new Error('boom'), { apiKey: 'kmq_live_should_not_leak' });
+
+      expect(() => filter.catch(exception, executionContext)).toThrow(exception);
+      expect(errorSpy).toHaveBeenCalledOnce();
+
+      const logged = errorSpy.mock.calls[0]?.[0] as string;
+      expect(logged).not.toContain('kmq_live_should_not_leak');
+      const parsed = JSON.parse(logged) as Record<string, unknown>;
+      expect(parsed['kind']).toBe('tool');
+      expect(parsed['name']).toBe('send_event');
+      expect(parsed['requestId']).toBe('req-mcp-1');
+    });
   });
 });

@@ -1,4 +1,5 @@
-import { createHmac, randomBytes } from 'node:crypto';
+import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { KestrelApiError, KestrelClient } from '../sdk/src/index.js';
 import { IntegrationChannel } from '../src/generated/prisma/enums.js';
@@ -78,7 +79,36 @@ function computeExpectedKestrelSignature(
   return `v1=${digest}`;
 }
 
-describe('KestrelMQ Stage 6 End-to-End Integration Suite (Testcontainers)', () => {
+interface McpTextResult {
+  readonly isError?: boolean;
+  readonly content: ReadonlyArray<{ readonly type: string; readonly text?: string }>;
+}
+
+function mcpText(result: unknown): string {
+  return (result as McpTextResult).content.find((item) => item.type === 'text')?.text ?? '';
+}
+
+function mcpJson<T>(result: unknown): T {
+  return JSON.parse(mcpText(result)) as T;
+}
+
+async function postRawMcp(
+  baseUrl: string,
+  path: string,
+  headers: Record<string, string> = {},
+): Promise<Response> {
+  return fetch(`${baseUrl}${path}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+      ...headers,
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+  });
+}
+
+describe('KestrelMQ End-to-End Integration Suite (Testcontainers)', () => {
   let env: E2eEnvironment;
 
   let accessToken = '';
@@ -696,5 +726,138 @@ describe('KestrelMQ Stage 6 End-to-End Integration Suite (Testcontainers)', () =
     expect(raw429.headers.get('x-ratelimit-limit')).toBe('15');
     expect(raw429.headers.get('x-ratelimit-remaining')).toBe('0');
     expect(Number(raw429.headers.get('retry-after'))).toBeGreaterThanOrEqual(1);
+  });
+
+  it('Flow 6: MCP Streamable HTTP (/mcp) -> API-key tenant isolation, endpoint 401/429, send_event -> worker delivery, inspect & resources', async () => {
+    env.sink.clearRequests('/sink/mcp');
+
+    // 1. Endpoint-level ApiKeyGuard: no key -> RFC 9457 401 before any JSON-RPC handling
+    const unauthenticated = await postRawMcp(env.apiBaseUrl, '/mcp');
+    expect(unauthenticated.status).toBe(401);
+    expect(unauthenticated.headers.get('content-type')).toContain('application/problem+json');
+
+    // 2. Mounted outside the v1 global prefix
+    const prefixed = await postRawMcp(env.apiBaseUrl, '/v1/mcp', { 'X-API-Key': apiKey });
+    expect(prefixed.status).toBe(404);
+
+    // 3. Endpoint-level RateLimitGuard: the primary workspace quota was exhausted by Flow 5
+    const throttled = await postRawMcp(env.apiBaseUrl, '/mcp', { Authorization: `Bearer ${apiKey}` });
+    expect(throttled.status).toBe(429);
+    expect(throttled.headers.get('content-type')).toContain('application/problem+json');
+
+    // 4. Second workspace with its own key, integration and BYOT routing rule
+    const workspaceRes = await httpJson<CreatedWorkspaceResponse>(env.apiBaseUrl, '/v1/workspaces', {
+      method: 'POST',
+      token: accessToken,
+      json: { name: 'MCP E2E Workspace', slug: `mcp-e2e-${randomBytes(3).toString('hex')}` },
+    });
+    expect(workspaceRes.status).toBe(201);
+    const mcpWorkspaceId = workspaceRes.body.id;
+
+    const mcpKeyRes = await httpJson<CreatedApiKeyResponse>(
+      env.apiBaseUrl,
+      `/v1/workspaces/${mcpWorkspaceId}/api-keys`,
+      { method: 'POST', token: accessToken, json: { name: 'MCP Agent Key' } },
+    );
+    expect(mcpKeyRes.status).toBe(201);
+    const mcpApiKey = mcpKeyRes.body.apiKey;
+
+    const mcpIntegrationRes = await httpJson<IntegrationResponse>(env.apiBaseUrl, '/v1/integrations', {
+      method: 'POST',
+      token: accessToken,
+      workspaceId: mcpWorkspaceId,
+      json: {
+        name: 'MCP Sink Webhook',
+        channel: 'WEBHOOK',
+        provider: 'CUSTOM_WEBHOOK',
+        credentials: { url: env.sink.urlFor('/sink/mcp') },
+      },
+    });
+    expect(mcpIntegrationRes.status).toBe(201);
+
+    const mcpRuleRes = await httpJson<RoutingRuleResponse>(env.apiBaseUrl, '/v1/rules', {
+      method: 'POST',
+      token: accessToken,
+      workspaceId: mcpWorkspaceId,
+      json: { eventName: 'mcp.order.paid', integrationId: mcpIntegrationRes.body.id },
+    });
+    expect(mcpRuleRes.status).toBe(201);
+
+    // 5. Official MCP client over real Streamable HTTP
+    const client = new Client({ name: 'kestrelmq-e2e', version: '0.0.0' });
+    await client.connect(
+      new StreamableHTTPClientTransport(new URL('/mcp', env.apiBaseUrl), {
+        requestInit: { headers: { Authorization: `Bearer ${mcpApiKey}` } },
+      }),
+    );
+
+    try {
+      const { tools } = await client.listTools();
+      expect(tools.map((tool) => tool.name).sort()).toEqual([
+        'get_analytics_summary',
+        'inspect_delivery',
+        'list_deliveries',
+        'replay_delivery',
+        'send_event',
+        'toggle_inbound_source',
+      ]);
+
+      const sendResult = await client.callTool({
+        name: 'send_event',
+        arguments: {
+          event: 'mcp.order.paid',
+          payload: { orderId: 'mcp_1', amount: 42 },
+          idempotencyKey: `mcp-${randomUUID()}`,
+        },
+      });
+      expect(sendResult.isError).toBeFalsy();
+      const sent = mcpJson<{ readonly workspaceId: string; readonly deliveryIds: readonly string[] }>(
+        sendResult,
+      );
+      expect(sent.workspaceId).toBe(mcpWorkspaceId);
+      expect(sent.deliveryIds).toHaveLength(1);
+      const mcpDeliveryId = sent.deliveryIds[0] as string;
+
+      // Worker (not the API process) performs the outbound call
+      const received = await env.sink.waitForRequests('/sink/mcp', 1, 15_000);
+      expect(received[0]?.rawBody).toContain('mcp_1');
+
+      const delivered = await pollUntil(
+        async () =>
+          mcpJson<{ readonly status: string; readonly attempts: readonly unknown[] }>(
+            await client.callTool({ name: 'inspect_delivery', arguments: { deliveryId: mcpDeliveryId } }),
+          ),
+        (delivery) => delivery.status === 'DELIVERED',
+        { description: 'MCP delivery to reach DELIVERED' },
+      );
+      expect(delivered.attempts.length).toBeGreaterThanOrEqual(1);
+
+      const listed = mcpJson<{ readonly data: ReadonlyArray<{ readonly id: string }> }>(
+        await client.callTool({ name: 'list_deliveries', arguments: { limit: 10 } }),
+      );
+      expect(listed.data.map((delivery) => delivery.id)).toEqual([mcpDeliveryId]);
+
+      // Cross-tenant: a delivery of the primary workspace is invisible to this key
+      const foreignDelivery = await env.prisma.delivery.findFirstOrThrow({ where: { workspaceId } });
+      const foreignResult = await client.callTool({
+        name: 'inspect_delivery',
+        arguments: { deliveryId: foreignDelivery.id },
+      });
+      expect(foreignResult.isError).toBe(true);
+      expect(mcpText(foreignResult)).toMatch(/not found/i);
+
+      // Client-supplied workspaceId is rejected by the strict input schema
+      const injected = await client.callTool({
+        name: 'get_analytics_summary',
+        arguments: { workspaceId },
+      });
+      expect(injected.isError).toBe(true);
+
+      const { contents } = await client.readResource({ uri: 'kestrelmq://templates' });
+      const templatesBody = contents[0] !== undefined && 'text' in contents[0] ? contents[0].text : '';
+      expect(JSON.parse(templatesBody)).toEqual([]);
+    } finally {
+      await client.close();
+    }
   });
 });

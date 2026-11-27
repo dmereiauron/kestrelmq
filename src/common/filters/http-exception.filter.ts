@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Logger,
 } from '@nestjs/common';
+import { McpExecutionContext, type McpContextType } from '@nestjs/mcp';
 import type { Response } from 'express';
 import type { AuthenticatedRequest } from '../interfaces/authenticated-request.interface.js';
 import { maskSensitiveData } from '../utils/mask-sensitive.util.js';
@@ -53,6 +54,10 @@ export class HttpExceptionFilter implements ExceptionFilter {
   readonly #logger = new Logger(HttpExceptionFilter.name);
 
   catch(exception: unknown, host: ArgumentsHost): void {
+    if (host.getType<McpContextType | 'http'>() === 'mcp') {
+      this.#rethrowForMcp(exception, host);
+    }
+
     const ctx = host.switchToHttp();
     const request = ctx.getRequest<AuthenticatedRequest>();
     const response = ctx.getResponse<Response>();
@@ -112,5 +117,26 @@ export class HttpExceptionFilter implements ExceptionFilter {
     };
 
     response.status(status).type('application/problem+json').json(problem);
+  }
+
+  /**
+   * MCP tool/resource calls carry no HTTP response to write: `@nestjs/mcp` turns what the filter rethrows into a
+   * tool result with `isError: true` (an `HttpException` keeps its message) or a JSON-RPC error (resources), so
+   * writing problem+json here would corrupt the JSON-RPC stream. Unexpected errors are logged masked first.
+   */
+  #rethrowForMcp(exception: unknown, host: ArgumentsHost): never {
+    if (!(exception instanceof HttpException)) {
+      const mcp = McpExecutionContext.create(host);
+      this.#logger.error(
+        JSON.stringify({
+          message: 'Unhandled exception in MCP call',
+          kind: mcp.getKind(),
+          name: mcp.getName(),
+          requestId: mcp.getRequest<AuthenticatedRequest>()?.requestId,
+          error: maskSensitiveData(exception),
+        }),
+      );
+    }
+    throw exception;
   }
 }

@@ -5,6 +5,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module.js';
 import { setupSwagger } from './common/swagger/swagger.config.js';
 import type { EnvConfig } from './config/env.validation.js';
+import { MCP_HTTP_PATH } from './modules/mcp/mcp.constants.js';
 
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -12,7 +13,7 @@ async function bootstrap(): Promise<void> {
   });
 
   app.enableShutdownHooks();
-  app.setGlobalPrefix('v1');
+  app.setGlobalPrefix('v1', { exclude: [MCP_HTTP_PATH] });
   setupSwagger(app);
 
   const configService = app.get<ConfigService<EnvConfig, true>>(ConfigService);
