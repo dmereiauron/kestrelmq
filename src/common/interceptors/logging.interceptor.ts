@@ -7,6 +7,7 @@ import {
   Logger,
   type NestInterceptor,
 } from '@nestjs/common';
+import { McpExecutionContext, type McpContextType } from '@nestjs/mcp';
 import type { Response } from 'express';
 import { performance } from 'node:perf_hooks';
 import { type Observable, tap } from 'rxjs';
@@ -18,7 +19,11 @@ export class LoggingInterceptor implements NestInterceptor {
   readonly #logger = new Logger(LoggingInterceptor.name);
 
   intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
-    if (context.getType() !== 'http') {
+    const contextType = context.getType<McpContextType | 'http'>();
+    if (contextType === 'mcp') {
+      return this.#interceptMcpCall(context, next);
+    }
+    if (contextType !== 'http') {
       return next.handle();
     }
 
@@ -67,6 +72,42 @@ export class LoggingInterceptor implements NestInterceptor {
               headers: maskedHeaders,
               query: maskedQuery,
               body: maskedBody,
+              error: maskSensitiveData(error),
+            }),
+          );
+        },
+      }),
+    );
+  }
+
+  /**
+   * One structured line per MCP tool/resource call: name, workspace, duration and outcome, with the input masked.
+   * Results are not logged (they can hold delivery payloads); the enclosing HTTP request is logged separately.
+   */
+  #interceptMcpCall(context: ExecutionContext, next: CallHandler): Observable<unknown> {
+    const startMs = performance.now();
+    const mcp = McpExecutionContext.create(context);
+    const request = mcp.getRequest<AuthenticatedRequest>();
+    const entry = {
+      requestId: request?.requestId,
+      kind: mcp.getKind(),
+      name: mcp.getName(),
+      workspaceId: request?.workspaceId,
+      input: maskSensitiveData(mcp.getInput<unknown>()),
+    };
+    const elapsed = (): number => Math.round((performance.now() - startMs) * 100) / 100;
+
+    return next.handle().pipe(
+      tap({
+        next: (): void => {
+          this.#logger.log(JSON.stringify({ ...entry, durationMs: elapsed(), outcome: 'ok' }));
+        },
+        error: (error: unknown): void => {
+          this.#logger.warn(
+            JSON.stringify({
+              ...entry,
+              durationMs: elapsed(),
+              outcome: 'error',
               error: maskSensitiveData(error),
             }),
           );

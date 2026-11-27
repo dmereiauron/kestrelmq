@@ -4,6 +4,7 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import { McpExecutionContext, type McpContextType } from '@nestjs/mcp';
 import { CryptoService } from '../crypto/crypto.service.js';
 import type {
   AuthenticatedApiKey,
@@ -54,7 +55,14 @@ export class ApiKeyGuard implements CanActivate {
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
+    const isMcpCall = context.getType<McpContextType | 'http'>() === 'mcp';
+    const request = this.#resolveRequest(context, isMcpCall);
+
+    // A call-level check on an MCP tool/resource whose HTTP request already passed the endpoint-level guard.
+    if (isMcpCall && request.apiKey !== undefined && request.workspaceId === request.apiKey.workspaceId) {
+      return true;
+    }
+
     const rawKey = this.#extractRawKey(request);
 
     if (
@@ -108,6 +116,17 @@ export class ApiKeyGuard implements CanActivate {
     request.workspaceId = metadata.workspaceId;
 
     return true;
+  }
+
+  #resolveRequest(context: ExecutionContext, isMcpCall: boolean): AuthenticatedRequest {
+    if (!isMcpCall) {
+      return context.switchToHttp().getRequest<AuthenticatedRequest>();
+    }
+    const request = McpExecutionContext.create(context).getRequest<AuthenticatedRequest>();
+    if (request === undefined) {
+      throw new UnauthorizedException('API key authentication requires the HTTP transport');
+    }
+    return request;
   }
 
   #extractRawKey(request: AuthenticatedRequest): string | undefined {

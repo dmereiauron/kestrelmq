@@ -20,6 +20,7 @@ KestrelMQ decouples outbound notifications (Webhooks, Email via Mailgun, Telegra
 - **Inbound Webhook Gateway & Buffering:** Constant-time `rawBody` HMAC verification (`Stripe`, `Shopify`, `GitHub`, `Custom HMAC`), ingress/egress rate shaping, and `Pause` / `Resume` buffering during downstream deployments or migrations.
 - **High-Throughput Operations:** Backpressure-driven RFC 4180 streaming CSV bulk ingestion (`POST /v1/events/bulk`), zero-`OFFSET` keyset cursor pagination, plan-aware Redis ZSET sliding-window rate limiting, 60s Cache-Aside analytics (`PERCENTILE_CONT(0.95)`), and daily plan-aware retention cleanup.
 - **Typed SDK & OpenAPI Docs:** Zero-dependency `@kestrelmq/sdk` TypeScript client with RFC 9457 `KestrelApiError` parsing and interactive Swagger UI at `/docs`.
+- **MCP Server for AI Agents:** Official `@nestjs/mcp` Streamable HTTP server at `/mcp`. It exposes six tenant-isolated tools and two discovery resources to Claude Code, Cursor, and other MCP clients, authenticated with workspace API keys.
 
 ---
 
@@ -30,6 +31,7 @@ flowchart LR
   subgraph Clients["Client Apps & Upstream Senders"]
     Backend["App Backend\n(@kestrelmq/sdk)"]
     Dashboard["Admin / Web UI\n(Bearer JWT)"]
+    Agent["AI Agents\n(Claude Code / Cursor)"]
     External["Stripe / GitHub / Shopify\n(Signed Webhooks)"]
   end
 
@@ -37,6 +39,7 @@ flowchart LR
     EventsAPI["POST /v1/events\nPOST /v1/events/bulk"]
     InboundAPI["POST /v1/inbound/:slug\n(rawBody HMAC + Pause/Resume)"]
     MgmtAPI["Workspaces / Rules / Templates\nDeliveries / Analytics / Docs"]
+    McpAPI["/mcp\n(MCP Streamable HTTP)"]
   end
 
   subgraph Storage["State & Queue Layer"]
@@ -58,6 +61,7 @@ flowchart LR
   Backend -->|"Bearer kmq_live_..."| EventsAPI
   Dashboard -->|"Bearer JWT + X-Workspace-Id"| MgmtAPI
   External -->|"HMAC Signature"| InboundAPI
+  Agent -->|"Bearer kmq_live_..."| McpAPI
 
   EventsAPI --> PG
   EventsAPI --> Redis
@@ -65,6 +69,8 @@ flowchart LR
   InboundAPI --> Redis
   MgmtAPI --> PG
   MgmtAPI --> Redis
+  McpAPI --> PG
+  McpAPI --> Redis
 
   Redis --> DeliveryProc
   Redis --> RetentionProc
@@ -86,6 +92,7 @@ flowchart LR
 | **Framework** | NestJS 12 (`@nestjs/platform-express`, `@nestjs/bullmq`, `@nestjs/swagger`) |
 | **Database & ORM** | PostgreSQL 18 Alpine + Prisma 7 (`prisma-client` ESM generator + `@prisma/adapter-pg`) |
 | **Queues & Caching** | Redis 8.2 Alpine + BullMQ 6 + `ioredis` Lua scripts |
+| **AI Agent Integration** | `@nestjs/mcp` + `@modelcontextprotocol/server` (stateless Streamable HTTP), Zod 4 tool schemas |
 | **Testing** | Vitest 5 + `@testcontainers/postgresql` & `@testcontainers/redis` |
 
 ---
@@ -262,6 +269,76 @@ export function verifyKestrelWebhook(
   return provided.byteLength === expected.byteLength && timingSafeEqual(provided, expected);
 }
 ```
+
+---
+
+## MCP Server Integration (`/mcp`)
+
+KestrelMQ ships an official [Model Context Protocol](https://modelcontextprotocol.io) server built with `@nestjs/mcp` and `@modelcontextprotocol/server`. AI agents can send events, follow and replay deliveries, read analytics, and pause or resume inbound sources directly from the conversation.
+
+- **Endpoint:** `http://localhost:3000/mcp`, stateless Streamable HTTP. It sits outside the `/v1` prefix and needs no session affinity behind a load balancer.
+- **Auth:** a workspace API key, sent as `Authorization: Bearer kmq_live_...` or `X-API-Key`. Every HTTP request passes `ApiKeyGuard` and the workspace `RateLimitGuard`. A missing or invalid key gets `401` and an exceeded quota gets `429`, both as RFC 9457 problem details. Each tool and resource call is checked again.
+- **Tenant isolation:** every call is scoped to the workspace of the API key. No tool accepts a `workspaceId` argument, and strict input schemas reject one. IDs from another workspace return `not found`.
+- **Process separation:** the server is mounted in the API gateway (`src/main.ts`) only. Tools enqueue BullMQ jobs and never call external providers; the worker (`src/worker.ts`) performs every outbound delivery.
+
+### Claude Code
+
+Add a project-scoped `.mcp.json`. Claude Code expands `${KESTRELMQ_API_KEY}` from your environment, so the key never lands in the repository:
+
+```json
+{
+  "mcpServers": {
+    "kestrelmq": {
+      "type": "http",
+      "url": "http://localhost:3000/mcp",
+      "headers": {
+        "Authorization": "Bearer ${KESTRELMQ_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+Or register it from the CLI:
+
+```bash
+claude mcp add --transport http kestrelmq http://localhost:3000/mcp --header "Authorization: Bearer $KESTRELMQ_API_KEY"
+```
+
+### Cursor
+
+Add the server to `~/.cursor/mcp.json` (global) or `.cursor/mcp.json` (project):
+
+```json
+{
+  "mcpServers": {
+    "kestrelmq": {
+      "url": "http://localhost:3000/mcp",
+      "headers": {
+        "Authorization": "Bearer ${env:KESTRELMQ_API_KEY}"
+      }
+    }
+  }
+}
+```
+
+### Tools
+
+| Tool | Arguments | Description |
+| :--- | :--- | :--- |
+| `send_event` | `event`, `payload`, `recipient?`, `idempotencyKey?`, `deliverAt?` | Enqueues an outbound event and fans it out by routing rules. Returns `eventId` and `deliveryIds`. |
+| `list_deliveries` | `limit?` (1–100), `cursor?`, `status?`, `eventName?`, `integrationId?` | Newest-first workspace deliveries with keyset cursor pagination (`nextCursor`, `hasMore`). |
+| `inspect_delivery` | `deliveryId` | Delivery details with the ordered `delivery_attempts` audit timeline, with sensitive keys masked. |
+| `replay_delivery` | `deliveryId` | Resets the delivery to `PENDING` and re-enqueues it with a fresh retry budget. |
+| `get_analytics_summary` | `window?` (`24h` \| `7d` \| `30d`) | Event and delivery totals, status counts, success rate, and avg/p95 duration (60s cache). |
+| `toggle_inbound_source` | `sourceId`, `action` (`pause` \| `resume`) | Buffers inbound webhooks as `PAUSED`, or drains them at `max_rate_per_sec`. |
+
+### Resources
+
+| URI | Contents |
+| :--- | :--- |
+| `kestrelmq://schemas` | Registered event names, validation modes (`DISABLED` / `WARN` / `STRICT`), dot-path payload variables, and JSON Schemas. Sample payloads are omitted. |
+| `kestrelmq://templates` | Notification templates with their subject, Handlebars variable placeholders, and the routing rules (event name, channel) that use them. |
 
 ---
 

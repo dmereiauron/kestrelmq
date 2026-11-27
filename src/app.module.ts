@@ -20,6 +20,7 @@ import { DeliveriesModule } from './modules/deliveries/deliveries.module.js';
 import { EventsModule } from './modules/events/events.module.js';
 import { InboundModule } from './modules/inbound/inbound.module.js';
 import { IntegrationsModule } from './modules/integrations/integrations.module.js';
+import { KestrelMcpModule } from './modules/mcp/kestrel-mcp.module.js';
 import { ProvidersModule } from './modules/providers/providers.module.js';
 import { RulesModule } from './modules/rules/rules.module.js';
 import { EventSchemasModule } from './modules/schemas/event-schemas.module.js';
@@ -48,6 +49,7 @@ import { WorkspacesModule } from './modules/workspaces/workspaces.module.js';
     DeliveriesModule,
     AnalyticsModule,
     InboundModule,
+    KestrelMcpModule,
   ],
   providers: [
     {

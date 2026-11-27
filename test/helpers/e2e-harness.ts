@@ -10,6 +10,7 @@ import type { AddressInfo } from 'node:net';
 import { resolve } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import type { PrismaService } from '../../src/common/prisma/prisma.service.js';
+import { MCP_HTTP_PATH } from '../../src/modules/mcp/mcp.constants.js';
 import type { RulesService } from '../../src/modules/rules/rules.service.js';
 import { LocalWebhookSink } from './webhook-sink.js';
 
@@ -88,7 +89,7 @@ export async function startE2eEnvironment(options?: {
     logger: ['error', 'warn'],
   });
   app.enableShutdownHooks();
-  app.setGlobalPrefix('v1');
+  app.setGlobalPrefix('v1', { exclude: [MCP_HTTP_PATH] });
   setupSwagger(app);
   await app.listen(0, '127.0.0.1');
 
