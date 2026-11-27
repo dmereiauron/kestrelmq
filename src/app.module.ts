@@ -11,9 +11,12 @@ import { HttpExceptionFilter } from './common/filters/http-exception.filter.js';
 import { LoggingInterceptor } from './common/interceptors/logging.interceptor.js';
 import { RequestContextMiddleware } from './common/middleware/request-context.middleware.js';
 import { PrismaModule } from './common/prisma/prisma.module.js';
+import { QueueModule } from './common/queue/queue.module.js';
 import { RedisModule } from './common/redis/redis.module.js';
 import { validateEnv } from './config/env.validation.js';
 import { AuthModule } from './modules/auth/auth.module.js';
+import { EventsModule } from './modules/events/events.module.js';
+import { InboundModule } from './modules/inbound/inbound.module.js';
 import { IntegrationsModule } from './modules/integrations/integrations.module.js';
 import { ProvidersModule } from './modules/providers/providers.module.js';
 import { RulesModule } from './modules/rules/rules.module.js';
@@ -29,6 +32,7 @@ import { WorkspacesModule } from './modules/workspaces/workspaces.module.js';
     }),
     PrismaModule,
     RedisModule,
+    QueueModule,
     CryptoModule,
     AuthModule,
     WorkspacesModule,
@@ -37,6 +41,8 @@ import { WorkspacesModule } from './modules/workspaces/workspaces.module.js';
     TemplatesModule,
     RulesModule,
     EventSchemasModule,
+    EventsModule,
+    InboundModule,
   ],
   providers: [
     {

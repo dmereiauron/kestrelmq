@@ -33,6 +33,7 @@ export default defineConfig({
         'src/**/*.module.ts',
         'src/**/*.interface.ts',
         'src/main.ts',
+        'src/worker.ts',
         'src/generated/**',
       ],
     },
