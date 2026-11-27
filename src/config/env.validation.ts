@@ -30,6 +30,7 @@ export const envSchema = z
     RATE_LIMIT_FREE_MAX: z.coerce.number().int().positive().default(60),
     RATE_LIMIT_PRO_MAX: z.coerce.number().int().positive().default(600),
     RATE_LIMIT_ENTERPRISE_MAX: z.coerce.number().int().positive().default(3_000),
+    BACKOFF_SCALE_FACTOR: z.coerce.number().positive().default(1),
   })
   .refine((env) => env.JWT_ACCESS_SECRET !== env.JWT_REFRESH_SECRET, {
     path: ['JWT_REFRESH_SECRET'],

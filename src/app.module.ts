@@ -30,6 +30,7 @@ import { WorkspacesModule } from './modules/workspaces/workspaces.module.js';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      ignoreEnvFile: process.env['NODE_ENV'] === 'test',
       validate: validateEnv,
     }),
     PrismaModule,
