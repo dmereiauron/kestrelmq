@@ -233,7 +233,7 @@ Receiving servers can verify authenticity and prevent replay attacks by rejectin
 - `src/modules/analytics/`: Aggregated delivery metrics with Redis Cache-Aside caching (60s TTL, `JwtOrApiKeyGuard`).
 - `src/modules/mcp/`: Official Model Context Protocol (MCP) server (`@nestjs/mcp` + `@modelcontextprotocol/server`) exposing workspace-isolated tools and resources over Streamable HTTP.
 - `src/modules/worker/`: BullMQ background processors (`DeliveryProcessor`, `RetentionProcessor`, `WorkerModule`) bootstrapped by `src/worker.ts` with Graceful Shutdown hooks.
-- `sdk/`: Strongly typed zero-dependency TypeScript client SDK (`@kestrelmq/sdk`).
+- `sdk/`: Strongly typed zero-dependency TypeScript client SDK (`@kestrelmq/sdk`, installable via `npm install @kestrelmq/sdk`).
 
 ---
 

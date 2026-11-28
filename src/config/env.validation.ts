@@ -4,6 +4,16 @@ export const envSchema = z
   .object({
     NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
     PORT: z.coerce.number().int().min(1).max(65535).default(3000),
+    CORS_ORIGINS: z
+      .string()
+      .trim()
+      .min(1, {
+        error: 'CORS_ORIGINS must contain at least one origin',
+      })
+      .refine((val) => val.split(',').some((origin) => origin.trim().length > 0), {
+        message: 'CORS_ORIGINS must contain at least one valid origin',
+      })
+      .default('http://localhost:3001'),
     POSTGRES_URL: z.url({
       protocol: /^postgres(ql)?$/,
       error: 'POSTGRES_URL must be a valid postgres:// or postgresql:// connection URL',

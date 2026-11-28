@@ -12,11 +12,35 @@ async function bootstrap(): Promise<void> {
     rawBody: true,
   });
 
+  const configService = app.get<ConfigService<EnvConfig, true>>(ConfigService);
+  const rawCorsOrigins = configService.get('CORS_ORIGINS', { infer: true });
+  const corsOrigins = rawCorsOrigins
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter((origin) => origin.length > 0);
+
+  app.enableCors({
+    origin: corsOrigins.includes('*') ? true : corsOrigins,
+    credentials: true,
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Idempotency-Key',
+      'X-Request-Id',
+    ],
+    exposedHeaders: [
+      'X-RateLimit-Limit',
+      'X-RateLimit-Remaining',
+      'X-RateLimit-Reset',
+      'Retry-After',
+      'X-Request-Id',
+    ],
+  });
+
   app.enableShutdownHooks();
   app.setGlobalPrefix('v1', { exclude: [MCP_HTTP_PATH] });
   setupSwagger(app);
 
-  const configService = app.get<ConfigService<EnvConfig, true>>(ConfigService);
   const port = configService.get('PORT', { infer: true });
 
   await app.listen(port);
