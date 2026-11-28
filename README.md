@@ -600,7 +600,13 @@ Click **Authorize** in Swagger UI to authenticate using either:
 
 ## `@kestrelmq/sdk` Usage
 
-Build the standalone zero-dependency TypeScript SDK in `sdk/`:
+Install the zero-dependency TypeScript SDK from npm:
+
+```bash
+npm install @kestrelmq/sdk
+```
+
+Or build the standalone SDK locally in `sdk/` (for monorepo or sibling repository linking via `file:../kestrelmq/sdk`):
 
 ```bash
 npm run sdk:build
