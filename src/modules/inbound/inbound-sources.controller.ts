@@ -56,6 +56,7 @@ export class InboundSourcesController {
   }
 
   @Get()
+  @Roles(WorkspaceRole.OWNER, WorkspaceRole.ADMIN, WorkspaceRole.VIEWER)
   @ApiOperation({ summary: 'List inbound webhook sources in the workspace' })
   @ApiOkResponse({ description: 'List of inbound sources' })
   async listSources(

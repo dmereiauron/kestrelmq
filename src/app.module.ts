@@ -18,6 +18,7 @@ import { AnalyticsModule } from './modules/analytics/analytics.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { DeliveriesModule } from './modules/deliveries/deliveries.module.js';
 import { EventsModule } from './modules/events/events.module.js';
+import { HealthModule } from './modules/health/health.module.js';
 import { InboundModule } from './modules/inbound/inbound.module.js';
 import { IntegrationsModule } from './modules/integrations/integrations.module.js';
 import { KestrelMcpModule } from './modules/mcp/kestrel-mcp.module.js';
@@ -38,6 +39,7 @@ import { WorkspacesModule } from './modules/workspaces/workspaces.module.js';
     RedisModule,
     QueueModule,
     CryptoModule,
+    HealthModule,
     AuthModule,
     WorkspacesModule,
     ProvidersModule,

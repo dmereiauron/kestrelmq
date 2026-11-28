@@ -6,19 +6,18 @@ import {
   Post,
   type RawBodyRequest,
   Req,
-  Res,
 } from '@nestjs/common';
 import { ApiBody, ApiHeader, ApiOkResponse, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
-import type { Response } from 'express';
+import { Public } from '../../common/decorators/public.decorator.js';
 import type { AuthenticatedRequest } from '../../common/interfaces/authenticated-request.interface.js';
 import { ProblemDetailsDto } from '../../common/swagger/problem-details.dto.js';
 import {
-  InboundRateLimitExceededException,
   InboundService,
   type ReceiveInboundWebhookResponse,
 } from './inbound.service.js';
 
 @ApiTags('Inbound Gateway')
+@Public()
 @Controller('inbound')
 export class InboundGatewayController {
   readonly #inboundService: InboundService;
@@ -28,6 +27,7 @@ export class InboundGatewayController {
   }
 
   @Post(':sourceSlug')
+  @Public()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Public inbound webhook receiver with constant-time rawBody HMAC verification',
@@ -65,15 +65,9 @@ export class InboundGatewayController {
     type: ProblemDetailsDto,
   })
   @ApiResponse({ status: 404, description: 'Inbound source slug not found', type: ProblemDetailsDto })
-  @ApiResponse({
-    status: 429,
-    description: 'Inbound source ingress rate limit exceeded',
-    type: ProblemDetailsDto,
-  })
   async receiveWebhook(
     @Param('sourceSlug') sourceSlug: string,
     @Req() request: RawBodyRequest<AuthenticatedRequest>,
-    @Res({ passthrough: true }) response: Response,
   ): Promise<ReceiveInboundWebhookResponse> {
     const contentLength = request.headers['content-length'];
     const isExplicitlyEmpty = contentLength === '0';
@@ -84,18 +78,11 @@ export class InboundGatewayController {
           ? Buffer.alloc(0)
           : undefined;
 
-    try {
-      return await this.#inboundService.receiveWebhook({
-        sourceSlug,
-        rawBody,
-        headers: request.headers,
-        parsedBody: request.body,
-      });
-    } catch (error: unknown) {
-      if (error instanceof InboundRateLimitExceededException) {
-        response.setHeader('Retry-After', String(error.retryAfterSec));
-      }
-      throw error;
-    }
+    return this.#inboundService.receiveWebhook({
+      sourceSlug,
+      rawBody,
+      headers: request.headers,
+      parsedBody: request.body,
+    });
   }
 }

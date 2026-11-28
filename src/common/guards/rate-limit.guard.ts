@@ -69,8 +69,12 @@ export class RateLimitGuard implements CanActivate {
     );
 
     const remaining = Math.max(0, maxRequests - result.currentCount);
+    const resetDeltaMs = result.allowed ? this.#windowMs : Math.max(1, result.retryAfterMs);
+    const resetEpochSec = Math.ceil((Date.now() + resetDeltaMs) / 1_000);
+
     response.setHeader('X-RateLimit-Limit', String(maxRequests));
     response.setHeader('X-RateLimit-Remaining', String(remaining));
+    response.setHeader('X-RateLimit-Reset', String(resetEpochSec));
 
     if (!result.allowed) {
       const retryAfterSec = Math.max(1, Math.ceil(result.retryAfterMs / 1_000));

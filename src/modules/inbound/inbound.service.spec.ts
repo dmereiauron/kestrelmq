@@ -1,19 +1,19 @@
 import {
   BadRequestException,
   ConflictException,
-  HttpStatus,
   NotFoundException,
   type RawBodyRequest,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Reflector } from '@nestjs/core';
 import type { Queue } from 'bullmq';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import type { Response } from 'express';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CryptoService } from '../../common/crypto/crypto.service.js';
+import { ROLES_KEY } from '../../common/decorators/roles.decorator.js';
 import type { AuthenticatedRequest } from '../../common/interfaces/authenticated-request.interface.js';
 import type { PrismaService } from '../../common/prisma/prisma.service.js';
 import {
@@ -21,20 +21,17 @@ import {
   type DeliveryJobPayload,
   KESTREL_BACKOFF_TYPE,
 } from '../../common/queue/queue.constants.js';
-import type { RedisService } from '../../common/redis/redis.service.js';
 import type { EnvConfig } from '../../config/env.validation.js';
 import {
   DeliveryStatus,
   EventDirection,
   InboundProviderType,
+  WorkspaceRole,
 } from '../../generated/prisma/enums.js';
 import { CreateInboundSourceDto } from './dto/create-inbound-source.dto.js';
 import { InboundGatewayController } from './inbound-gateway.controller.js';
 import { InboundSourcesController } from './inbound-sources.controller.js';
-import {
-  InboundRateLimitExceededException,
-  InboundService,
-} from './inbound.service.js';
+import { InboundService } from './inbound.service.js';
 
 describe('InboundService, InboundSourcesController & InboundGatewayController', () => {
   let cryptoService: CryptoService;
@@ -49,7 +46,6 @@ describe('InboundService, InboundSourcesController & InboundGatewayController', 
   let deliveryFindManyMock: ReturnType<typeof vi.fn>;
   let deliveryUpdateMock: ReturnType<typeof vi.fn>;
   let deliveryUpdateManyMock: ReturnType<typeof vi.fn>;
-  let rateLimitMock: ReturnType<typeof vi.fn>;
   let queueAddMock: ReturnType<typeof vi.fn>;
   let queueAddBulkMock: ReturnType<typeof vi.fn>;
 
@@ -102,16 +98,6 @@ describe('InboundService, InboundSourcesController & InboundGatewayController', 
       },
     } as unknown as PrismaService;
 
-    rateLimitMock = vi.fn().mockResolvedValue({
-      allowed: true,
-      currentCount: 1,
-      retryAfterMs: 0,
-    });
-
-    const redisService = {
-      checkSlidingWindowRateLimit: rateLimitMock,
-    } as unknown as RedisService;
-
     queueAddMock = vi.fn().mockResolvedValue({});
     queueAddBulkMock = vi.fn().mockResolvedValue([]);
     const deliveriesQueue = {
@@ -119,7 +105,7 @@ describe('InboundService, InboundSourcesController & InboundGatewayController', 
       addBulk: queueAddBulkMock,
     } as unknown as Queue<DeliveryJobPayload, unknown, string>;
 
-    service = new InboundService(prismaService, cryptoService, redisService, deliveriesQueue);
+    service = new InboundService(prismaService, cryptoService, deliveriesQueue);
     sourcesController = new InboundSourcesController(service);
     gatewayController = new InboundGatewayController(service);
   });
@@ -217,6 +203,18 @@ describe('InboundService, InboundSourcesController & InboundGatewayController', 
     expect(list).toHaveLength(1);
     expect(list[0]?.hasSigningSecret).toBe(true);
 
+    // Verify VIEWER role is permitted on GET /v1/inbound-sources
+    const reflector = new Reflector();
+    const listRoles = reflector.getAllAndOverride<readonly WorkspaceRole[]>(ROLES_KEY, [
+      InboundSourcesController.prototype.listSources,
+      InboundSourcesController,
+    ]);
+    expect(listRoles).toEqual([
+      WorkspaceRole.OWNER,
+      WorkspaceRole.ADMIN,
+      WorkspaceRole.VIEWER,
+    ]);
+
     sourceDeleteManyMock.mockResolvedValueOnce({ count: 1 });
     await expect(sourcesController.deleteSource(workspaceId, sourceId)).resolves.toBeUndefined();
 
@@ -226,7 +224,7 @@ describe('InboundService, InboundSourcesController & InboundGatewayController', 
     );
   });
 
-  it('verifies all 5 provider signatures on POST /v1/inbound/:sourceSlug and rejects 401/404/429', async () => {
+  it('verifies all 5 provider signatures on POST /v1/inbound/:sourceSlug, rejects 401/404, and absorbs traffic spikes without 429 drops', async () => {
     const workspaceId = randomUUID();
     const fixedNowMs = 1_760_000_000_000;
     const fixedNowSec = Math.floor(fixedNowMs / 1_000);
@@ -383,34 +381,21 @@ describe('InboundService, InboundSourcesController & InboundGatewayController', 
       }),
     ).rejects.toThrow(UnauthorizedException);
 
-    // 429 Too Many Requests + Retry-After header when sliding-window rate limit exceeded
-    sourceFindUniqueMock.mockResolvedValueOnce(noneSrc);
-    rateLimitMock.mockResolvedValueOnce({
-      allowed: false,
-      currentCount: 5,
-      retryAfterMs: 750,
-    });
+    // Absorbs burst spikes exceeding maxRatePerSec without ingress 429 drops (egress is shaped by worker)
+    const burstSource = { ...noneSrc, maxRatePerSec: 1 };
+    for (let i = 0; i < 5; i += 1) {
+      sourceFindUniqueMock.mockResolvedValueOnce(burstSource);
+      mockPersistSuccess();
+      const mockReq = {
+        rawBody,
+        headers: {},
+        body: { burstIndex: i },
+      } as unknown as RawBodyRequest<AuthenticatedRequest>;
 
-    const setHeaderMock = vi.fn();
-    const mockRes = { setHeader: setHeaderMock } as unknown as Response;
-    const mockReq = {
-      rawBody,
-      headers: {},
-      body: { burst: 1 },
-    } as unknown as RawBodyRequest<AuthenticatedRequest>;
-
-    let rateErr: unknown;
-    try {
-      await gatewayController.receiveWebhook(noneSrc.sourceSlug, mockReq, mockRes);
-    } catch (err: unknown) {
-      rateErr = err;
+      const burstRes = await gatewayController.receiveWebhook(burstSource.sourceSlug, mockReq);
+      expect(burstRes.received).toBe(true);
+      expect(burstRes.status).toBe(DeliveryStatus.PENDING);
     }
-
-    expect(rateErr).toBeInstanceOf(InboundRateLimitExceededException);
-    expect((rateErr as InboundRateLimitExceededException).getStatus()).toBe(
-      HttpStatus.TOO_MANY_REQUESTS,
-    );
-    expect(setHeaderMock).toHaveBeenCalledWith('Retry-After', '1');
   });
 
   it('buffers deliveries in PAUSED status while source is paused and flushes paced batches on resume', async () => {

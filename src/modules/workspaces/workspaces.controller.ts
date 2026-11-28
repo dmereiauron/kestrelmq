@@ -2,13 +2,15 @@ import {
   Body,
   Controller,
   ForbiddenException,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseUUIDPipe,
   Post,
   Req,
   UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOkResponse, ApiOperation, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { CurrentUser } from '../../common/decorators/current-user.decorator.js';
 import { Roles, WorkspaceIdParam } from '../../common/decorators/roles.decorator.js';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard.js';
@@ -26,6 +28,7 @@ import { CreateWorkspaceDto } from './dto/create-workspace.dto.js';
 import {
   type CreatedApiKeyResponse,
   type CreatedWorkspaceResponse,
+  type RotatedWebhookSecretResponse,
   type WorkspaceMemberResponse,
   WorkspacesService,
 } from './workspaces.service.js';
@@ -87,5 +90,19 @@ export class WorkspacesController {
     @Body() dto: CreateApiKeyDto,
   ): Promise<CreatedApiKeyResponse> {
     return this.#workspacesService.createApiKey(workspaceId, dto);
+  }
+
+  @Post(':id/rotate-secret')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(RolesGuard)
+  @Roles(WorkspaceRole.OWNER, WorkspaceRole.ADMIN)
+  @ApiOperation({ summary: 'Rotate workspace outbound webhook signing secret (whsec_...)' })
+  @ApiOkResponse({ description: 'New outbound webhook signing secret generated' })
+  @ApiResponse({ status: 403, description: 'Forbidden', type: ProblemDetailsDto })
+  @ApiResponse({ status: 404, description: 'Workspace not found', type: ProblemDetailsDto })
+  async rotateSecret(
+    @Param('id', ParseUUIDPipe) workspaceId: string,
+  ): Promise<RotatedWebhookSecretResponse> {
+    return this.#workspacesService.rotateWebhookSecret(workspaceId);
   }
 }

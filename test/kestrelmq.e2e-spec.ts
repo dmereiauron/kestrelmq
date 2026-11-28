@@ -18,6 +18,7 @@ import type { TemplateResponse } from '../src/modules/templates/templates.servic
 import type {
   CreatedApiKeyResponse,
   CreatedWorkspaceResponse,
+  RotatedWebhookSecretResponse,
 } from '../src/modules/workspaces/workspaces.service.js';
 import { type E2eEnvironment, pollUntil, startE2eEnvironment } from './helpers/e2e-harness.js';
 
@@ -132,7 +133,16 @@ describe('KestrelMQ End-to-End Integration Suite (Testcontainers)', () => {
     }
   });
 
-  it('Flow 1: Auth registration/login -> Workspace -> API key -> Encrypted Integration + Handlebars Template + Routing Rule & OpenAPI /docs', async () => {
+  it('Flow 1: Healthcheck -> Auth registration/login -> Workspace + Secret Rotation -> API key -> Encrypted Integration + Handlebars Template + Routing Rule & OpenAPI /docs', async () => {
+    // Verify public GET /v1/health probing Postgres (SELECT 1) and Redis (PING)
+    const healthRes = await httpJson<{
+      readonly status: string;
+      readonly checks: { readonly postgres: string; readonly redis: string };
+    }>(env.apiBaseUrl, '/v1/health');
+    expect(healthRes.status).toBe(200);
+    expect(healthRes.body.status).toBe('ok');
+    expect(healthRes.body.checks).toEqual({ postgres: 'up', redis: 'up' });
+
     // Verify Swagger UI (/docs) & OpenAPI JSON (/docs-json)
     const swaggerUiRes = await fetch(`${env.apiBaseUrl}/docs`);
     expect(swaggerUiRes.status).toBe(200);
@@ -197,7 +207,21 @@ describe('KestrelMQ End-to-End Integration Suite (Testcontainers)', () => {
     expect(workspaceRes.status).toBe(201);
     expect(workspaceRes.body.webhookSigningSecret).toMatch(/^whsec_/);
     workspaceId = workspaceRes.body.id;
-    webhookSigningSecret = workspaceRes.body.webhookSigningSecret;
+    const initialSecret = workspaceRes.body.webhookSigningSecret;
+
+    // Rotate workspace webhookSigningSecret via POST /v1/workspaces/:id/rotate-secret
+    const rotatedSecretRes = await httpJson<RotatedWebhookSecretResponse>(
+      env.apiBaseUrl,
+      `/v1/workspaces/${workspaceId}/rotate-secret`,
+      {
+        method: 'POST',
+        token: accessToken,
+      },
+    );
+    expect(rotatedSecretRes.status).toBe(200);
+    expect(rotatedSecretRes.body.webhookSigningSecret).toMatch(/^whsec_/);
+    expect(rotatedSecretRes.body.webhookSigningSecret).not.toBe(initialSecret);
+    webhookSigningSecret = rotatedSecretRes.body.webhookSigningSecret;
 
     // 3. Generate API Key
     const apiKeyRes = await httpJson<CreatedApiKeyResponse>(
@@ -314,7 +338,7 @@ describe('KestrelMQ End-to-End Integration Suite (Testcontainers)', () => {
     expect(jsonLogicMatches[0]?.resolvedTarget).toBe(outboundUrl);
   });
 
-  it('Flow 2: Outbound POST /v1/events (202) -> BullMQ worker delivery with verified X-KestrelMQ-Signature (v1=) -> DELIVERED + audit row + Idempotent replay (200)', async () => {
+  it('Flow 2: Outbound POST /v1/events (202) -> BullMQ worker delivery with verified X-KestrelMQ-Signature (v1=) -> DELIVERED + audit row + Idempotent replay (202)', async () => {
     env.sink.clearRequests('/sink/outbound');
 
     // Dispatch first request and verify HTTP 202 Accepted
@@ -374,7 +398,7 @@ describe('KestrelMQ End-to-End Integration Suite (Testcontainers)', () => {
     expect(detail.attempts[0]?.attemptNumber).toBe(1);
     expect(detail.attempts[0]?.responseStatus).toBe(200);
 
-    // Replay identical event with same Idempotency-Key via both raw HTTP (assert 200 OK) & SDK
+    // Replay identical event with same Idempotency-Key via raw HTTP (assert 202 Accepted)
     const rawReplayRes = await httpJson<{
       readonly eventId: string;
       readonly idempotentReplay: boolean;
@@ -395,7 +419,7 @@ describe('KestrelMQ End-to-End Integration Suite (Testcontainers)', () => {
       },
     });
 
-    expect(rawReplayRes.status).toBe(200);
+    expect(rawReplayRes.status).toBe(202);
     expect(rawReplayRes.body.idempotentReplay).toBe(true);
     expect(rawReplayRes.body.eventId).toBe(rawFirstRes.body.eventId);
     expect(rawReplayRes.body.deliveryIds).toEqual([deliveryId]);
@@ -725,6 +749,9 @@ describe('KestrelMQ End-to-End Integration Suite (Testcontainers)', () => {
     expect(raw429.status).toBe(429);
     expect(raw429.headers.get('x-ratelimit-limit')).toBe('15');
     expect(raw429.headers.get('x-ratelimit-remaining')).toBe('0');
+    expect(Number(raw429.headers.get('x-ratelimit-reset'))).toBeGreaterThanOrEqual(
+      Math.floor(Date.now() / 1_000),
+    );
     expect(Number(raw429.headers.get('retry-after'))).toBeGreaterThanOrEqual(1);
   });
 

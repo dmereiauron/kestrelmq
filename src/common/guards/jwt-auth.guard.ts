@@ -2,12 +2,15 @@ import {
   type CanActivate,
   type ExecutionContext,
   Injectable,
+  Optional,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import type { EnvConfig } from '../../config/env.validation.js';
 import type { JwtAccessPayload } from '../../modules/auth/interfaces/jwt-payload.interface.js';
+import { IS_PUBLIC_KEY } from '../decorators/public.decorator.js';
 import type { AuthenticatedRequest } from '../interfaces/authenticated-request.interface.js';
 
 const BEARER_PATTERN = /^Bearer\s+(\S+)$/i;
@@ -16,13 +19,33 @@ const BEARER_PATTERN = /^Bearer\s+(\S+)$/i;
 export class JwtAuthGuard implements CanActivate {
   readonly #jwtService: JwtService;
   readonly #accessSecret: string;
+  readonly #reflector?: Reflector;
 
-  constructor(jwtService: JwtService, configService: ConfigService<EnvConfig, true>) {
+  constructor(
+    jwtService: JwtService,
+    configService: ConfigService<EnvConfig, true>,
+    @Optional() reflector?: Reflector,
+  ) {
     this.#jwtService = jwtService;
     this.#accessSecret = configService.get('JWT_ACCESS_SECRET', { infer: true });
+    this.#reflector = reflector;
   }
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
+    if (
+      this.#reflector &&
+      typeof context.getHandler === 'function' &&
+      typeof context.getClass === 'function'
+    ) {
+      const isPublic = this.#reflector.getAllAndOverride<boolean | undefined>(IS_PUBLIC_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]);
+      if (isPublic) {
+        return true;
+      }
+    }
+
     const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
     const authHeader = request.headers.authorization;
 

@@ -6,7 +6,7 @@
 
 ### Key Problems Solved
 - **Primary Backend Offloading:** Relieves main application services and serverless functions (Next.js, Vercel, Cloudflare Workers) from background execution, network latency, and retry management.
-- **Unified Notification Gateway:** Single integration point for multi-channel delivery (Email via Mailgun/Resend/SMTP, Telegram Bot API, Outbound Webhooks).
+- **Unified Notification Gateway:** Single integration point for multi-channel delivery (Email via Mailgun — with Resend & SMTP planned for `v0.2` — Telegram Bot API, Outbound Webhooks).
 - **Delayed Execution:** Supports scheduled message delivery and deferred webhook execution via the `deliverAt` parameter.
 - **Secure Credential Storage:** Cryptographic protection and rotation of client integration credentials using `AES-256-GCM`.
 - **Guaranteed Delivery (At-least-once):** Built-in exponential backoff retries, Dead Letter Queue (DLQ) handling, and manual task re-execution (`Replay`).
@@ -37,12 +37,12 @@
 ### 3.2. Inbound Event Lifecycle (Ingestion & Fan-out Flow)
 1. Client sends `POST /v1/events` with headers `Authorization: Bearer kmq_live_...` and `Idempotency-Key: <unique_key>`, along with body (`event`, `recipient`, `payload`, `deliverAt`).
 2. `AuthGuard` validates the API key by hashing the incoming token (`SHA-256`) and looking up the active key in Redis/PostgreSQL to extract `workspaceId`.
-3. `SchemaValidationGuard` validates `payload` against the stored schema in `event_schemas` (if configured for `workspaceId + event_name`):
+3. `RateLimitGuard` enforces workspace request quotas using a Redis Sliding Window algorithm (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`). Exceeding limits returns `429 Too Many Requests` with a `Retry-After` header.
+4. `IngestionService` checks `idempotency:{workspaceId}:{key}` in Redis (`SET NX EX 86400`) backed by PostgreSQL's partial unique index `(workspace_id, idempotency_key)`. If the key already exists, returns the cached `202 Accepted` response (`idempotentReplay: true`) without duplicate enqueueing.
+5. `EventSchemasService` validates `payload` against the stored schema in `event_schemas` (if configured for `workspaceId + event_name`):
    - **DISABLED (default):** Accepts `payload` without validation.
    - **WARN:** Enqueues the event even on schema mismatch, but records validation warnings in `schema_warnings` for UI highlighting.
-   - **STRICT:** Immediately rejects invalid payloads with `400 Bad Request` and detailed Ajv validation errors.
-4. `RateLimitGuard` enforces workspace request quotas using a Redis Sliding Window algorithm. Exceeding limits returns `429 Too Many Requests` with a `Retry-After` header.
-5. `IdempotencyInterceptor` checks `idempotency:{workspaceId}:{key}` in Redis (`SET NX EX 86400`). If the key already exists, returns the cached `202 Accepted` response without duplicate enqueueing.
+   - **STRICT:** Immediately rejects invalid payloads with `400 Bad Request` and detailed Ajv validation errors (releasing any in-flight idempotency lock).
 6. Persists the record into `events` within a single PostgreSQL transaction.
 7. Queries all active `routing_rules` matching `workspaceId` and `event_name` (e.g., `order.paid` or wildcard `*`).
 8. For each matching rule, creates a `deliveries` record (`PENDING` or `SCHEDULED`) and enqueues a job in BullMQ (with `delay` if `deliverAt` is set). If `recipient` is omitted in the event envelope, target fields (`email`, `telegramChatId`, `webhookUrl`) are resolved dynamically from nested `payload` properties via `getByPath`.
@@ -124,7 +124,7 @@ Receiving servers can verify authenticity and prevent replay attacks by rejectin
    - `workspace_id` (FK -> `workspaces.id`, ON DELETE CASCADE)
    - `name` (VARCHAR)
    - `channel` (ENUM: `EMAIL`, `TELEGRAM`, `WEBHOOK`, `SLACK`)
-   - `provider` (ENUM: `MAILGUN`, `RESEND`, `SMTP`, `TELEGRAM_BOT`, `CUSTOM_WEBHOOK`)
+   - `provider` (ENUM: `MAILGUN`, `RESEND` *(v0.2)*, `SMTP` *(v0.2)*, `TELEGRAM_BOT`, `CUSTOM_WEBHOOK`)
    - `encrypted_credentials` (TEXT)
    - `iv` (VARCHAR)
    - `auth_tag` (VARCHAR)
@@ -218,21 +218,22 @@ Receiving servers can verify authenticity and prevent replay attacks by rejectin
 ## 5. NestJS Module Architecture & Project Structure
 
 - `src/config/`: Environment variable loading and validation via Zod.
-- `src/common/`: Guards (`JwtAuthGuard`, `ApiKeyGuard`, `RolesGuard`, `RateLimitGuard`), Interceptors (`IdempotencyInterceptor`, `LoggingInterceptor`), `HttpExceptionFilter` (RFC 9457 / RFC 7807), `CryptoService`, and `getByPath` helper.
+- `src/common/`: Guards (`JwtAuthGuard`, `ApiKeyGuard`, `JwtOrApiKeyGuard`, `RolesGuard`, `RateLimitGuard`), Decorators (`@Public()`, `@Roles()`, `@CurrentUser()`, `@CurrentWorkspaceId()`), Interceptors (`LoggingInterceptor` with recursive secret + PII masking), `HttpExceptionFilter` (RFC 9457 / RFC 7807), `CryptoService`, and `getByPath` helper.
+- `src/modules/health/`: Public liveness/readiness probe (`GET /v1/health`) verifying PostgreSQL (`SELECT 1`) and Redis (`PING`).
 - `src/modules/auth/`: User registration, login, JWT Access (15m) and Refresh (7d) tokens, Redis refresh token rotation.
-- `src/modules/workspaces/`: Workspace management, RBAC member assignments, and API key generation.
+- `src/modules/workspaces/`: Workspace management, RBAC member assignments, API key generation, and `webhook_signing_secret` rotation (`POST /v1/workspaces/:id/rotate-secret`).
 - `src/modules/integrations/`: Provider connections, `AES-256-GCM` secret encryption, `POST /v1/integrations/:id/test`.
-- `src/modules/providers/`: Strategy pattern (`NotificationProvider`, `ProviderFactory`, adapters for Mailgun, Resend, Telegram, and Webhook).
+- `src/modules/providers/`: Strategy pattern (`NotificationProvider`, `ProviderFactory`, active `v0.1` adapters for Mailgun, Telegram, and Webhook; `RESEND` and `SMTP` adapters scheduled for `v0.2`).
 - `src/modules/templates/`: Handlebars template compilation engine + fallback resolution for pre-rendered `payload.html` / `payload.text` (BYOT).
 - `src/modules/rules/`: Routing rules mapping `event_name -> integration + template`.
-- `src/modules/schemas/`: Sample-to-Schema JSON Schema inference, Ajv validation, and dot-path variable extraction.
-- `src/modules/inbound/`: Public inbound webhook receiver (`rawBody`), upstream HMAC signature verification, `inbound_sources` CRUD, and `Pause / Resume` queue draining.
+- `src/modules/schemas/`: Sample-to-Schema JSON Schema inference, Ajv validation, dot-path variable extraction, and `/v1/schemas` CRUD controller.
+- `src/modules/inbound/`: Public inbound webhook receiver (`rawBody`), upstream HMAC signature verification (zero ingress drops on bursts), `inbound_sources` CRUD, and `Pause / Resume` rate-limited queue draining.
 - `src/modules/events/`: Single event ingestion (`POST /v1/events`), fan-out orchestration, and streaming CSV bulk import (`POST /v1/events/bulk`).
-- `src/modules/deliveries/`: Cursor-based delivery logs, attempt inspection, `Replay`, and `Cancel`.
-- `src/modules/analytics/`: Aggregated delivery metrics with Redis Cache-Aside caching (60s TTL).
+- `src/modules/deliveries/`: Cursor-based delivery logs, attempt inspection, `Replay`, and `Cancel` (`JwtOrApiKeyGuard`).
+- `src/modules/analytics/`: Aggregated delivery metrics with Redis Cache-Aside caching (60s TTL, `JwtOrApiKeyGuard`).
 - `src/modules/mcp/`: Official Model Context Protocol (MCP) server (`@nestjs/mcp` + `@modelcontextprotocol/server`) exposing workspace-isolated tools and resources over Streamable HTTP.
-- `src/workers/`: BullMQ background processors (`DeliveryProcessor`, `RetentionProcessor`, `src/worker.ts`) with Graceful Shutdown hooks.
-- `packages/sdk/`: Strongly typed TypeScript client SDK (`@kestrelmq/sdk`).
+- `src/modules/worker/`: BullMQ background processors (`DeliveryProcessor`, `RetentionProcessor`, `WorkerModule`) bootstrapped by `src/worker.ts` with Graceful Shutdown hooks.
+- `sdk/`: Strongly typed zero-dependency TypeScript client SDK (`@kestrelmq/sdk`).
 
 ---
 
@@ -240,34 +241,46 @@ Receiving servers can verify authenticity and prevent replay attacks by rejectin
 
 | Method | Path | Auth | Description | Status Codes |
 | :--- | :--- | :--- | :--- | :--- |
+| `GET` | `/v1/health` | Public (`@Public`) | Readiness & liveness check (`SELECT 1` + Redis `PING`) | `200, 503` |
 | `POST` | `/v1/auth/register` | Public | Register a new user | `201, 400, 409` |
 | `POST` | `/v1/auth/login` | Public | Authenticate user and issue token pair | `200, 401` |
 | `POST` | `/v1/auth/refresh` | Refresh JWT | Rotate Refresh token and issue new Access token | `200, 401` |
 | `POST` | `/v1/auth/logout` | Access JWT | Revoke current Refresh token | `204, 401` |
-| `POST` | `/v1/workspaces` | Access JWT | Create a new workspace | `201, 400, 401` |
-| `POST` | `/v1/workspaces/:id/members` | Access JWT (Admin) | Add member to workspace | `201, 403, 404` |
-| `POST` | `/v1/workspaces/:id/api-keys` | Access JWT (Admin) | Generate new API key `kmq_live_...` | `201, 403` |
-| `POST` | `/v1/integrations` | Access JWT (Admin) | Create provider integration | `201, 400` |
-| `GET` | `/v1/integrations` | Access JWT | List workspace integrations | `200` |
-| `POST` | `/v1/integrations/:id/test` | Access JWT (Admin) | Send test connectivity ping | `200, 400, 502` |
-| `DELETE` | `/v1/integrations/:id` | Access JWT (Admin) | Delete integration | `204, 404` |
-| `POST` | `/v1/templates` | Access JWT | Create message template | `201, 400` |
-| `GET` | `/v1/templates` | Access JWT | List message templates | `200` |
-| `POST` | `/v1/rules` | Access JWT | Create routing rule | `201, 400` |
-| `GET` | `/v1/rules` | Access JWT | List routing rules | `200` |
-| `PATCH` | `/v1/rules/:id` | Access JWT | Update routing rule | `200, 404` |
-| `POST` | `/v1/events` | API Key | Ingest single event (Idempotency, `deliverAt`) | `202, 400, 401, 429` |
-| `POST` | `/v1/events/bulk` | API Key | Stream CSV bulk ingestion (`multipart/form-data`) | `202, 400, 413` |
-| `GET` | `/v1/deliveries` | Access JWT | List deliveries (cursor pagination) | `200` |
-| `GET` | `/v1/deliveries/:id` | Access JWT | Get delivery details and attempt history | `200, 404` |
-| `POST` | `/v1/deliveries/:id/replay` | Access JWT | Re-enqueue delivery for execution | `200, 404` |
-| `POST` | `/v1/deliveries/:id/cancel` | Access JWT | Cancel scheduled/pending delivery | `200, 400, 404` |
-| `GET` | `/v1/analytics/summary` | Access JWT | Delivery metrics summary (`24h`, `7d`, `30d`) | `200` |
-| `POST` | `/v1/inbound-sources` | Access JWT | Create inbound webhook source | `201, 400` |
-| `GET` | `/v1/inbound-sources` | Access JWT | List inbound webhook sources | `200` |
-| `POST` | `/v1/inbound-sources/:id/pause` | Access JWT | Pause forwarding (deployment buffer mode) | `200, 404` |
-| `POST` | `/v1/inbound-sources/:id/resume` | Access JWT | Resume forwarding buffered webhooks | `200, 404` |
-| `POST` | `/v1/inbound/:sourceSlug` | Public (HMAC) | Public inbound webhook receiver | `200, 401, 404` |
+| `POST` | `/v1/workspaces` | Access JWT | Create a new workspace | `201, 400, 401, 409` |
+| `POST` | `/v1/workspaces/:id/members` | Access JWT (`OWNER, ADMIN`) | Add member to workspace | `201, 403, 404, 409` |
+| `POST` | `/v1/workspaces/:id/api-keys` | Access JWT (`OWNER, ADMIN`) | Generate new API key `kmq_live_...` | `201, 403` |
+| `POST` | `/v1/workspaces/:id/rotate-secret` | Access JWT (`OWNER, ADMIN`) | Rotate workspace outbound `webhook_signing_secret` | `200, 403, 404` |
+| `POST` | `/v1/integrations` | Access JWT (`OWNER, ADMIN`) | Create provider integration | `201, 400` |
+| `GET` | `/v1/integrations` | Access JWT (`OWNER, ADMIN, VIEWER`) | List workspace integrations | `200` |
+| `POST` | `/v1/integrations/:id/test` | Access JWT (`OWNER, ADMIN`) | Send test connectivity ping | `200, 400, 404, 502` |
+| `DELETE` | `/v1/integrations/:id` | Access JWT (`OWNER, ADMIN`) | Delete integration | `204, 404` |
+| `POST` | `/v1/templates` | Access JWT (`OWNER, ADMIN`) | Create message template | `201, 400` |
+| `GET` | `/v1/templates` | Access JWT (`OWNER, ADMIN, VIEWER`) | List message templates | `200` |
+| `GET` | `/v1/templates/:id` | Access JWT (`OWNER, ADMIN, VIEWER`) | Get template by ID | `200, 404` |
+| `PATCH` | `/v1/templates/:id` | Access JWT (`OWNER, ADMIN`) | Update message template | `200, 404` |
+| `DELETE` | `/v1/templates/:id` | Access JWT (`OWNER, ADMIN`) | Delete message template | `204, 404` |
+| `POST` | `/v1/rules` | Access JWT (`OWNER, ADMIN`) | Create routing rule | `201, 400` |
+| `GET` | `/v1/rules` | Access JWT (`OWNER, ADMIN, VIEWER`) | List routing rules | `200` |
+| `PATCH` | `/v1/rules/:id` | Access JWT (`OWNER, ADMIN`) | Update routing rule | `200, 404` |
+| `DELETE` | `/v1/rules/:id` | Access JWT (`OWNER, ADMIN`) | Delete routing rule | `204, 404` |
+| `POST` | `/v1/schemas/infer` | Access JWT (`OWNER, ADMIN, VIEWER`) | Infer JSON Schema and dot-paths from sample payload | `200, 400` |
+| `POST` | `/v1/schemas` | Access JWT (`OWNER, ADMIN`) | Create or upsert event schema & validation mode | `201, 400` |
+| `GET` | `/v1/schemas` | Access JWT (`OWNER, ADMIN, VIEWER`) | List registered workspace event schemas | `200` |
+| `PATCH` | `/v1/schemas/:id` | Access JWT (`OWNER, ADMIN`) | Update event schema or validation mode | `200, 404` |
+| `DELETE` | `/v1/schemas/:id` | Access JWT (`OWNER, ADMIN`) | Delete event schema | `204, 404` |
+| `POST` | `/v1/events` | API Key | Ingest single event (Idempotency -> `202`, `deliverAt`) | `202, 400, 401, 409, 429` |
+| `POST` | `/v1/events/bulk` | API Key | Stream CSV bulk ingestion (`multipart/form-data`) | `202, 400, 401, 413, 429` |
+| `GET` | `/v1/deliveries` | Access JWT / API Key (`JwtOrApiKeyGuard`) | List deliveries (cursor pagination) | `200` |
+| `GET` | `/v1/deliveries/:id` | Access JWT / API Key (`JwtOrApiKeyGuard`) | Get delivery details and attempt history | `200, 404` |
+| `POST` | `/v1/deliveries/:id/replay` | Access JWT (`OWNER, ADMIN`) / API Key | Re-enqueue delivery for execution | `200, 404` |
+| `POST` | `/v1/deliveries/:id/cancel` | Access JWT (`OWNER, ADMIN`) / API Key | Cancel scheduled/pending delivery | `200, 400, 404` |
+| `GET` | `/v1/analytics/summary` | Access JWT / API Key (`JwtOrApiKeyGuard`) | Delivery metrics summary (`24h`, `7d`, `30d`) | `200` |
+| `POST` | `/v1/inbound-sources` | Access JWT (`OWNER, ADMIN`) | Create inbound webhook source | `201, 400, 409` |
+| `GET` | `/v1/inbound-sources` | Access JWT (`OWNER, ADMIN, VIEWER`) | List inbound webhook sources | `200` |
+| `DELETE` | `/v1/inbound-sources/:id` | Access JWT (`OWNER, ADMIN`) | Delete inbound webhook source | `204, 404` |
+| `POST` | `/v1/inbound-sources/:id/pause` | Access JWT (`OWNER, ADMIN`) | Pause forwarding (deployment buffer mode) | `200, 404` |
+| `POST` | `/v1/inbound-sources/:id/resume` | Access JWT (`OWNER, ADMIN`) | Resume forwarding buffered webhooks | `200, 404` |
+| `POST` | `/v1/inbound/:sourceSlug` | Public (HMAC) | Public inbound webhook receiver (spike-safe buffering) | `200, 401, 404` |
 | `POST / GET / DELETE` | `/mcp` | API Key | Model Context Protocol (MCP) Streamable HTTP endpoint (stateless; `GET`/`DELETE` → `405`) | `200, 202, 400, 401, 405, 429` |
 
 ---

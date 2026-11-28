@@ -11,7 +11,10 @@ import {
   type DlqJobPayload,
 } from '../../common/queue/queue.constants.js';
 import { RedisService } from '../../common/redis/redis.service.js';
-import { maskSensitiveData } from '../../common/utils/mask-sensitive.util.js';
+import {
+  maskSensitiveData,
+  maskSensitiveJsonString,
+} from '../../common/utils/mask-sensitive.util.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import {
   DeliveryStatus,
@@ -67,6 +70,11 @@ function truncateOptionalText(value: string | null | undefined): string | null {
     return value;
   }
   return `${value.slice(0, MAX_STORED_RESPONSE_BODY_CHARS)}...[truncated]`;
+}
+
+function sanitizeResponseBody(value: string | null | undefined): string | null {
+  const masked = maskSensitiveJsonString(value, { maskPii: true });
+  return truncateOptionalText(masked);
 }
 
 function classifyDeliveryError(
@@ -246,7 +254,7 @@ export class DeliveryProcessor extends WorkerHost {
             attemptNumber,
             requestPayload: safeRequestPayload,
             responseStatus: sendResult.statusCode,
-            responseBody: truncateOptionalText(sendResult.responseBody),
+            responseBody: sanitizeResponseBody(sendResult.responseBody),
             errorMessage: null,
             durationMs: sendResult.durationMs,
           },
@@ -472,7 +480,7 @@ export class DeliveryProcessor extends WorkerHost {
           attemptNumber: params.attemptNumber,
           requestPayload: params.requestPayload,
           responseStatus: params.classified.statusCode,
-          responseBody: truncateOptionalText(params.classified.responseBody),
+          responseBody: sanitizeResponseBody(params.classified.responseBody),
           errorMessage: truncateOptionalText(params.classified.message),
           durationMs: params.classified.durationMs,
         },
@@ -499,7 +507,7 @@ export class DeliveryProcessor extends WorkerHost {
         JSON.stringify({
           message: 'Failed to enqueue dead-letter delivery record',
           deliveryId: payload.deliveryId,
-          error: maskSensitiveData(dlqError),
+          error: maskSensitiveData(dlqError, { maskPii: true }),
         }),
       );
     }

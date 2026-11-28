@@ -10,8 +10,12 @@ const SENSITIVE_KEY_TOKENS = [
   'privatekey',
 ] as const;
 
+export interface MaskSensitiveOptions {
+  readonly maskPii?: boolean;
+}
+
 /**
- * Checks whether an object/header property name matches any sensitive key family
+ * Checks whether an object/header property name matches any sensitive credential key family
  * (`password`, `apiKey`, `credentials`, `token`, `secret`, `privateKey`, or `authorization`).
  */
 export function isSensitiveKey(key: string): boolean {
@@ -20,6 +24,19 @@ export function isSensitiveKey(key: string): boolean {
     return true;
   }
   return SENSITIVE_KEY_TOKENS.some((token) => normalized.includes(token));
+}
+
+/**
+ * Checks whether an object/header property name represents a PII field (`email` or `phone` word tokens).
+ */
+export function isPiiKey(key: string): boolean {
+  const words = key
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .toLowerCase()
+    .split(/[^a-z0-9]+/);
+  return words.some(
+    (word) => word === 'email' || word === 'emails' || word === 'phone' || word === 'phones',
+  );
 }
 
 function setSafeProperty(target: Record<string, unknown>, key: string, value: unknown): void {
@@ -36,11 +53,13 @@ function setSafeProperty(target: Record<string, unknown>, key: string, value: un
 }
 
 /**
- * Recursively clones data for safe logging/auditing, masking sensitive keys as `'[REDACTED]'`
- * and breaking circular object/array graphs using a `WeakSet<object>`.
+ * Recursively clones data for safe logging/auditing, masking sensitive keys (and optionally PII keys
+ * such as `email` and `phone` when `options.maskPii` is enabled) as `'[REDACTED]'` while breaking
+ * circular object/array graphs using a `WeakSet<object>`.
  */
 export function maskSensitiveData(
   value: unknown,
+  options: MaskSensitiveOptions = {},
   seen: WeakSet<object> = new WeakSet<object>(),
 ): unknown {
   if (value === null || value === undefined) {
@@ -70,7 +89,7 @@ export function maskSensitiveData(
   seen.add(value);
 
   if (Array.isArray(value)) {
-    return value.map((entry) => maskSensitiveData(entry, seen));
+    return value.map((entry) => maskSensitiveData(entry, options, seen));
   }
 
   if (value instanceof Error) {
@@ -82,12 +101,43 @@ export function maskSensitiveData(
 
   const masked: Record<string, unknown> = {};
   for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
-    if (isSensitiveKey(key)) {
+    if (isSensitiveKey(key) || (options.maskPii === true && isPiiKey(key))) {
       setSafeProperty(masked, key, REDACTED_VALUE);
     } else {
-      setSafeProperty(masked, key, maskSensitiveData(nestedValue, seen));
+      setSafeProperty(masked, key, maskSensitiveData(nestedValue, options, seen));
     }
   }
 
   return masked;
+}
+
+/**
+ * Parses a serialized JSON response string (if valid JSON object/array), recursively masks sensitive
+ * and optional PII keys via `maskSensitiveData`, and re-serializes it. Non-JSON text is returned unchanged.
+ */
+export function maskSensitiveJsonString(
+  raw: string | null | undefined,
+  options: MaskSensitiveOptions = {},
+): string | null {
+  if (raw === null || raw === undefined) {
+    return null;
+  }
+
+  const trimmed = raw.trim();
+  if (
+    !(trimmed.startsWith('{') && trimmed.endsWith('}')) &&
+    !(trimmed.startsWith('[') && trimmed.endsWith(']'))
+  ) {
+    return raw;
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    if (typeof parsed === 'object' && parsed !== null) {
+      return JSON.stringify(maskSensitiveData(parsed, options));
+    }
+    return raw;
+  } catch {
+    return raw;
+  }
 }
