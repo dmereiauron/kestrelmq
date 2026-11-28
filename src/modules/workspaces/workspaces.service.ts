@@ -42,6 +42,12 @@ export interface CreatedApiKeyResponse {
   readonly createdAt: Date;
 }
 
+export interface RotatedWebhookSecretResponse {
+  readonly id: string;
+  readonly webhookSigningSecret: string;
+  readonly updatedAt: Date;
+}
+
 function slugifyName(name: string): string {
   const base = name
     .trim()
@@ -196,6 +202,31 @@ export class WorkspacesService {
       apiKey: rawKey,
       createdAt: created.createdAt,
     };
+  }
+
+  async rotateWebhookSecret(workspaceId: string): Promise<RotatedWebhookSecretResponse> {
+    const existing = await this.#prismaService.workspace.findUnique({
+      where: { id: workspaceId },
+      select: { id: true },
+    });
+
+    if (!existing) {
+      throw new NotFoundException('Workspace not found');
+    }
+
+    const webhookSigningSecret = `${WorkspacesService.WEBHOOK_SECRET_PREFIX}${randomBytes(32).toString('hex')}`;
+
+    const updated = await this.#prismaService.workspace.update({
+      where: { id: existing.id },
+      data: { webhookSigningSecret },
+      select: {
+        id: true,
+        webhookSigningSecret: true,
+        updatedAt: true,
+      },
+    });
+
+    return updated;
   }
 
   async #resolveWorkspaceSlug(name: string, explicitSlug?: string): Promise<string> {

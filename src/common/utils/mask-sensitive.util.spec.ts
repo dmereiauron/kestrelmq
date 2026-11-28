@@ -2,13 +2,15 @@ import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   CIRCULAR_VALUE,
+  isPiiKey,
   isSensitiveKey,
   maskSensitiveData,
+  maskSensitiveJsonString,
   REDACTED_VALUE,
 } from './mask-sensitive.util.js';
 
-describe('maskSensitiveData', () => {
-  it('identifies all required sensitive key families and header variants', () => {
+describe('maskSensitiveData & maskSensitiveJsonString', () => {
+  it('identifies all required sensitive key families, PII keys, and header variants', () => {
     for (const key of [
       'password',
       'passwordHash',
@@ -30,18 +32,32 @@ describe('maskSensitiveData', () => {
       expect(isSensitiveKey(key)).toBe(true);
     }
 
-    for (const safeKey of ['id', 'email', 'fullName', 'workspaceId', 'slug', 'status']) {
+    for (const piiKey of [
+      'email',
+      'user_email',
+      'customerEmail',
+      'emailAddress',
+      'phone',
+      'user_phone',
+      'phoneNumber',
+    ]) {
+      expect(isPiiKey(piiKey)).toBe(true);
+    }
+
+    for (const safeKey of ['id', 'fullName', 'workspaceId', 'slug', 'status', 'microphone']) {
       expect(isSensitiveKey(safeKey)).toBe(false);
+      expect(isPiiKey(safeKey)).toBe(false);
     }
   });
 
-  it('recursively masks nested sensitive keys while preserving safe fields and special types', () => {
+  it('recursively masks nested sensitive keys and masks PII keys when maskPii is enabled', () => {
     const dynamicVal = randomBytes(16).toString('hex');
     const createdAt = new Date('2026-11-26T12:00:00.000Z');
     const invalidDate = new Date('invalid');
 
     const input = {
       email: 'alice@example.com',
+      phone: '+15550199',
       password: dynamicVal,
       apiKey: `kmq_live_${dynamicVal}`,
       credentials: { smtpUser: 'u', smtpHost: 'mail.example.com' },
@@ -49,6 +65,8 @@ describe('maskSensitiveData', () => {
         token: dynamicVal,
         secret: dynamicVal,
         privateKey: dynamicVal,
+        customerEmail: 'nested@example.com',
+        phoneNumber: '+15550100',
         safeCount: 42,
         createdAt,
         invalidDate,
@@ -59,16 +77,26 @@ describe('maskSensitiveData', () => {
       items: [{ refreshToken: dynamicVal, label: 'keep-me' }, null, undefined, true],
     };
 
-    const masked = maskSensitiveData(input) as Record<string, unknown>;
-    expect(masked['email']).toBe('alice@example.com');
-    expect(masked['password']).toBe(REDACTED_VALUE);
-    expect(masked['apiKey']).toBe(REDACTED_VALUE);
-    expect(masked['credentials']).toBe(REDACTED_VALUE);
+    // Default mode: credentials masked, PII preserved for workspace-owner API views
+    const maskedDefault = maskSensitiveData(input) as Record<string, unknown>;
+    expect(maskedDefault['email']).toBe('alice@example.com');
+    expect(maskedDefault['phone']).toBe('+15550199');
+    expect(maskedDefault['password']).toBe(REDACTED_VALUE);
+    expect(maskedDefault['apiKey']).toBe(REDACTED_VALUE);
+    expect(maskedDefault['credentials']).toBe(REDACTED_VALUE);
 
-    const nested = masked['nested'] as Record<string, unknown>;
+    // Log mode ({ maskPii: true }): both credentials and PII masked
+    const maskedWithPii = maskSensitiveData(input, { maskPii: true }) as Record<string, unknown>;
+    expect(maskedWithPii['email']).toBe(REDACTED_VALUE);
+    expect(maskedWithPii['phone']).toBe(REDACTED_VALUE);
+    expect(maskedWithPii['password']).toBe(REDACTED_VALUE);
+
+    const nested = maskedWithPii['nested'] as Record<string, unknown>;
     expect(nested['token']).toBe(REDACTED_VALUE);
     expect(nested['secret']).toBe(REDACTED_VALUE);
     expect(nested['privateKey']).toBe(REDACTED_VALUE);
+    expect(nested['customerEmail']).toBe(REDACTED_VALUE);
+    expect(nested['phoneNumber']).toBe(REDACTED_VALUE);
     expect(nested['safeCount']).toBe(42);
     expect(nested['createdAt']).toBe('2026-11-26T12:00:00.000Z');
     expect(nested['invalidDate']).toBe('Invalid Date');
@@ -76,11 +104,34 @@ describe('maskSensitiveData', () => {
     expect(nested['fn']).toBe('[Function]');
     expect(nested['err']).toEqual({ name: 'Error', message: 'timeout' });
 
-    const items = masked['items'] as unknown[];
+    const items = maskedWithPii['items'] as unknown[];
     expect(items[0]).toEqual({ refreshToken: REDACTED_VALUE, label: 'keep-me' });
     expect(items[1]).toBeNull();
     expect(items[2]).toBeUndefined();
     expect(items[3]).toBe(true);
+  });
+
+  it('masks serialized JSON response strings while leaving non-JSON text untouched', () => {
+    const rawSecret = randomBytes(12).toString('hex');
+    const jsonBody = JSON.stringify({
+      ok: true,
+      accessToken: rawSecret,
+      user: { email: 'bob@example.com', phone: '+380501112233' },
+    });
+
+    const sanitized = maskSensitiveJsonString(jsonBody, { maskPii: true });
+    expect(sanitized).not.toBeNull();
+    expect(JSON.parse(sanitized!)).toEqual({
+      ok: true,
+      accessToken: REDACTED_VALUE,
+      user: { email: REDACTED_VALUE, phone: REDACTED_VALUE },
+    });
+
+    expect(maskSensitiveJsonString('Service Unavailable', { maskPii: true })).toBe(
+      'Service Unavailable',
+    );
+    expect(maskSensitiveJsonString('{malformed-json', { maskPii: true })).toBe('{malformed-json');
+    expect(maskSensitiveJsonString(null)).toBeNull();
   });
 
   it('breaks circular object and array references via WeakSet without stack overflow', () => {

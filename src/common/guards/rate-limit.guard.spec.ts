@@ -141,8 +141,10 @@ describe('RateLimitGuard', () => {
       60,
       60_000,
     );
+    const nowSec = Math.floor(Date.now() / 1_000);
     expect(headers.get('X-RateLimit-Limit')).toBe('60');
     expect(headers.get('X-RateLimit-Remaining')).toBe('45');
+    expect(Number(headers.get('X-RateLimit-Reset'))).toBeGreaterThanOrEqual(nowSec + 59);
     expect(headers.has('Retry-After')).toBe(false);
   });
 
@@ -210,10 +212,12 @@ describe('RateLimitGuard', () => {
       caughtError = error;
     }
 
+    const nowSec = Math.floor(Date.now() / 1_000);
     expect(caughtError).toBeInstanceOf(HttpException);
     expect((caughtError as HttpException).getStatus()).toBe(HttpStatus.TOO_MANY_REQUESTS);
     expect(headers.get('X-RateLimit-Limit')).toBe('60');
     expect(headers.get('X-RateLimit-Remaining')).toBe('0');
+    expect(Number(headers.get('X-RateLimit-Reset'))).toBeGreaterThanOrEqual(nowSec + 4);
     expect(headers.get('Retry-After')).toBe('5');
   });
 });

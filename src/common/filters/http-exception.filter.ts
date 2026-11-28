@@ -95,7 +95,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
           message: 'Unhandled exception caught by HttpExceptionFilter',
           instance,
           requestId: request.requestId,
-          error: maskSensitiveData(exception),
+          error: maskSensitiveData(exception, { maskPii: true }),
         }),
       );
     }
@@ -133,7 +133,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
           kind: mcp.getKind(),
           name: mcp.getName(),
           requestId: mcp.getRequest<AuthenticatedRequest>()?.requestId,
-          error: maskSensitiveData(exception),
+          error: maskSensitiveData(exception, { maskPii: true }),
         }),
       );
     }

@@ -66,6 +66,7 @@ describe('LoggingInterceptor', () => {
     const rawSecret = randomBytes(16).toString('hex');
     const circularBody: Record<string, unknown> = {
       email: 'ops@kestrelmq.io',
+      phone: '+15550199',
       password: rawSecret,
       apiKey: `kmq_live_${rawSecret}`,
       credentials: { providerUser: 'mailgun' },
@@ -113,7 +114,8 @@ describe('LoggingInterceptor', () => {
     expect(parsed['durationMs'] as number).toBeGreaterThanOrEqual(0);
 
     const loggedBody = parsed['body'] as Record<string, unknown>;
-    expect(loggedBody['email']).toBe('ops@kestrelmq.io');
+    expect(loggedBody['email']).toBe('[REDACTED]');
+    expect(loggedBody['phone']).toBe('[REDACTED]');
     expect(loggedBody['password']).toBe('[REDACTED]');
     expect(loggedBody['apiKey']).toBe('[REDACTED]');
     expect(loggedBody['credentials']).toBe('[REDACTED]');
@@ -127,6 +129,7 @@ describe('LoggingInterceptor', () => {
     const loggedResponse = parsed['response'] as Record<string, unknown>;
     expect(loggedResponse['accessToken']).toBe('[REDACTED]');
     expect(loggedResponse['refreshToken']).toBe('[REDACTED]');
+    expect((loggedResponse['user'] as Record<string, unknown>)['email']).toBe('[REDACTED]');
   });
 
   it('logs warning with statusCode and durationMs when downstream handler throws', async () => {

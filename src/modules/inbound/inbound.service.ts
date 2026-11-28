@@ -2,8 +2,6 @@ import { InjectQueue } from '@nestjs/bullmq';
 import {
   BadRequestException,
   ConflictException,
-  HttpException,
-  HttpStatus,
   Injectable,
   NotFoundException,
   UnauthorizedException,
@@ -19,7 +17,6 @@ import {
   type DeliveryJobPayload,
   KESTREL_BACKOFF_TYPE,
 } from '../../common/queue/queue.constants.js';
-import { RedisService } from '../../common/redis/redis.service.js';
 import type { Prisma } from '../../generated/prisma/client.js';
 import {
   DeliveryStatus,
@@ -34,18 +31,7 @@ import {
 } from './utils/inbound-signature.util.js';
 
 const DEFAULT_INBOUND_MAX_RATE_PER_SEC = 10;
-const INBOUND_RATE_WINDOW_MS = 1_000;
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
-
-export class InboundRateLimitExceededException extends HttpException {
-  readonly retryAfterSec: number;
-
-  constructor(retryAfterSec: number) {
-    super('Inbound webhook rate limit exceeded', HttpStatus.TOO_MANY_REQUESTS);
-    this.name = 'InboundRateLimitExceededException';
-    this.retryAfterSec = Math.max(1, retryAfterSec);
-  }
-}
 
 export interface InboundSourceResponse {
   readonly id: string;
@@ -200,18 +186,15 @@ function resolveInboundEventName(
 export class InboundService {
   readonly #prismaService: PrismaService;
   readonly #cryptoService: CryptoService;
-  readonly #redisService: RedisService;
   readonly #deliveriesQueue: Queue<DeliveryJobPayload, unknown, string>;
 
   constructor(
     prismaService: PrismaService,
     cryptoService: CryptoService,
-    redisService: RedisService,
     @InjectQueue(DELIVERIES_QUEUE) deliveriesQueue: Queue<DeliveryJobPayload, unknown, string>,
   ) {
     this.#prismaService = prismaService;
     this.#cryptoService = cryptoService;
-    this.#redisService = redisService;
     this.#deliveriesQueue = deliveriesQueue;
   }
 
@@ -487,18 +470,6 @@ export class InboundService {
       if (!signatureValid) {
         throw new UnauthorizedException('Invalid inbound webhook signature');
       }
-    }
-
-    const rateLimitResult = await this.#redisService.checkSlidingWindowRateLimit(
-      `ratelimit:inbound:${source.id}`,
-      source.maxRatePerSec,
-      INBOUND_RATE_WINDOW_MS,
-      nowMs,
-    );
-
-    if (!rateLimitResult.allowed) {
-      const retryAfterSec = Math.max(1, Math.ceil(rateLimitResult.retryAfterMs / 1_000));
-      throw new InboundRateLimitExceededException(retryAfterSec);
     }
 
     const effectiveRawBody = Buffer.isBuffer(input.rawBody) ? input.rawBody : Buffer.alloc(0);

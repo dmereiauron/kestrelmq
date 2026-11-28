@@ -88,6 +88,8 @@ services:
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET is required}
       JWT_ACCESS_TTL_SEC: ${JWT_ACCESS_TTL_SEC:-900}
       JWT_REFRESH_TTL_SEC: ${JWT_REFRESH_TTL_SEC:-604800}
+    healthcheck:
+      disable: true
     command: ["node", "dist/worker.js"]
 
 volumes:

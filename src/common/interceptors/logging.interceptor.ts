@@ -35,9 +35,9 @@ export class LoggingInterceptor implements NestInterceptor {
     const method = request.method;
     const url = request.originalUrl || request.url;
     const requestId = request.requestId;
-    const maskedHeaders = maskSensitiveData(request.headers);
-    const maskedQuery = maskSensitiveData(request.query);
-    const maskedBody = maskSensitiveData(request.body);
+    const maskedHeaders = maskSensitiveData(request.headers, { maskPii: true });
+    const maskedQuery = maskSensitiveData(request.query, { maskPii: true });
+    const maskedBody = maskSensitiveData(request.body, { maskPii: true });
 
     return next.handle().pipe(
       tap({
@@ -53,7 +53,7 @@ export class LoggingInterceptor implements NestInterceptor {
               headers: maskedHeaders,
               query: maskedQuery,
               body: maskedBody,
-              response: maskSensitiveData(responseBody),
+              response: maskSensitiveData(responseBody, { maskPii: true }),
             }),
           );
         },
@@ -72,7 +72,7 @@ export class LoggingInterceptor implements NestInterceptor {
               headers: maskedHeaders,
               query: maskedQuery,
               body: maskedBody,
-              error: maskSensitiveData(error),
+              error: maskSensitiveData(error, { maskPii: true }),
             }),
           );
         },
@@ -93,7 +93,7 @@ export class LoggingInterceptor implements NestInterceptor {
       kind: mcp.getKind(),
       name: mcp.getName(),
       workspaceId: request?.workspaceId,
-      input: maskSensitiveData(mcp.getInput<unknown>()),
+      input: maskSensitiveData(mcp.getInput<unknown>(), { maskPii: true }),
     };
     const elapsed = (): number => Math.round((performance.now() - startMs) * 100) / 100;
 
@@ -108,7 +108,7 @@ export class LoggingInterceptor implements NestInterceptor {
               ...entry,
               durationMs: elapsed(),
               outcome: 'error',
-              error: maskSensitiveData(error),
+              error: maskSensitiveData(error, { maskPii: true }),
             }),
           );
         },

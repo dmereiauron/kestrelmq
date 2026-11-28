@@ -24,6 +24,7 @@ describe('WorkspacesService & WorkspacesController', () => {
   let cryptoService: CryptoService;
   let workspaceFindUniqueMock: ReturnType<typeof vi.fn>;
   let workspaceCreateMock: ReturnType<typeof vi.fn>;
+  let workspaceUpdateMock: ReturnType<typeof vi.fn>;
   let userFindUniqueMock: ReturnType<typeof vi.fn>;
   let memberCreateMock: ReturnType<typeof vi.fn>;
   let apiKeyCreateMock: ReturnType<typeof vi.fn>;
@@ -39,6 +40,7 @@ describe('WorkspacesService & WorkspacesController', () => {
 
     workspaceFindUniqueMock = vi.fn().mockResolvedValue(null);
     workspaceCreateMock = vi.fn();
+    workspaceUpdateMock = vi.fn();
     userFindUniqueMock = vi.fn();
     memberCreateMock = vi.fn();
     apiKeyCreateMock = vi.fn();
@@ -47,6 +49,7 @@ describe('WorkspacesService & WorkspacesController', () => {
       workspace: {
         findUnique: workspaceFindUniqueMock,
         create: workspaceCreateMock,
+        update: workspaceUpdateMock,
       },
       user: {
         findUnique: userFindUniqueMock,
@@ -211,6 +214,28 @@ describe('WorkspacesService & WorkspacesController', () => {
     expect(res.apiKey).toMatch(/^kmq_live_[0-9a-f]{48}$/);
     expect(storedHash).toBe(cryptoService.hashSha256(res.apiKey));
     expect(storedHash).not.toBe(res.apiKey);
+  });
+
+  it('rotates workspace webhookSigningSecret via POST /v1/workspaces/:id/rotate-secret and throws 404 when missing', async () => {
+    const workspaceId = randomUUID();
+    const updatedAt = new Date();
+
+    workspaceFindUniqueMock.mockResolvedValueOnce(null);
+    await expect(controller.rotateSecret(workspaceId)).rejects.toThrow(NotFoundException);
+
+    workspaceFindUniqueMock.mockResolvedValueOnce({ id: workspaceId });
+    workspaceUpdateMock.mockImplementationOnce(
+      async ({ data }: { data: { webhookSigningSecret: string } }) => ({
+        id: workspaceId,
+        webhookSigningSecret: data.webhookSigningSecret,
+        updatedAt,
+      }),
+    );
+
+    const rotated = await controller.rotateSecret(workspaceId);
+    expect(rotated.id).toBe(workspaceId);
+    expect(rotated.webhookSigningSecret).toMatch(/^whsec_[0-9a-f]{64}$/);
+    expect(rotated.updatedAt).toBe(updatedAt);
   });
 
   it('validates CreateWorkspaceDto, AddWorkspaceMemberDto, and CreateApiKeyDto constraints', async () => {

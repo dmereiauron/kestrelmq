@@ -6,7 +6,6 @@ import {
   HttpStatus,
   Post,
   Req,
-  Res,
   UseGuards,
 } from '@nestjs/common';
 import {
@@ -19,7 +18,6 @@ import {
   ApiSecurity,
   ApiTags,
 } from '@nestjs/swagger';
-import type { Response } from 'express';
 import { CurrentWorkspaceId } from '../../common/decorators/current-workspace.decorator.js';
 import { ApiKeyGuard } from '../../common/guards/api-key.guard.js';
 import { RateLimitGuard } from '../../common/guards/rate-limit.guard.js';
@@ -48,6 +46,7 @@ export class EventsController {
   }
 
   @Post()
+  @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
     summary: 'Ingest a single outbound notification event and fan out to BullMQ deliveries',
   })
@@ -57,8 +56,10 @@ export class EventsController {
     description: 'Optional deduplication key (24h TTL in Redis + PostgreSQL partial unique index)',
     schema: { type: 'string', maxLength: 255 },
   })
-  @ApiResponse({ status: 202, description: 'Event accepted and deliveries enqueued' })
-  @ApiResponse({ status: 200, description: 'Idempotent replay of previously accepted event' })
+  @ApiResponse({
+    status: 202,
+    description: 'Event accepted and deliveries enqueued (or cached idempotent replay returned)',
+  })
   @ApiResponse({
     status: 400,
     description: 'Invalid payload or STRICT Ajv schema validation failure',
@@ -74,16 +75,12 @@ export class EventsController {
     @CurrentWorkspaceId() workspaceId: string,
     @Body() dto: IngestEventDto,
     @Headers('idempotency-key') idempotencyKeyHeader: string | undefined,
-    @Res({ passthrough: true }) response: Response,
   ): Promise<IngestEventResponse> {
-    const result = await this.#ingestionService.ingestEvent(
+    return this.#ingestionService.ingestEvent(
       workspaceId,
       dto,
       idempotencyKeyHeader,
     );
-
-    response.status(result.idempotentReplay ? HttpStatus.OK : HttpStatus.ACCEPTED);
-    return result;
   }
 
   @Post('bulk')

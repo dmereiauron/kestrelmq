@@ -1,8 +1,8 @@
 import { BadRequestException, ConflictException, HttpStatus } from '@nestjs/common';
+import { HTTP_CODE_METADATA } from '@nestjs/common/constants';
 import type { Queue } from 'bullmq';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import type { Response } from 'express';
 import { randomUUID } from 'node:crypto';
 import { beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 import type { PrismaService } from '../../common/prisma/prisma.service.js';
@@ -187,7 +187,9 @@ describe('IngestionService & EventsController', () => {
         maxAttempts: 5,
       });
 
-    const mockRes = { status: vi.fn() } as unknown as Response;
+    expect(
+      Reflect.getMetadata(HTTP_CODE_METADATA, EventsController.prototype.ingestEvent),
+    ).toBe(HttpStatus.ACCEPTED);
 
     const result = await controller.ingestEvent(
       workspaceId,
@@ -197,10 +199,8 @@ describe('IngestionService & EventsController', () => {
         payload: { orderId: 'ord_100', amount: 79.5 },
       },
       'idem-order-1',
-      mockRes,
     );
 
-    expect(mockRes.status).toHaveBeenCalledWith(HttpStatus.ACCEPTED);
     expect(result.eventId).toBe(eventId);
     expect(result.idempotentReplay).toBe(false);
     expect(result.deliveryIds).toEqual([del1Id, del2Id]);
@@ -337,7 +337,7 @@ describe('IngestionService & EventsController', () => {
     expect(addBulkMock).not.toHaveBeenCalled();
   });
 
-  it('returns 200 OK with existing Event + deliveries on Redis idempotent replay or PostgreSQL P2002 race without re-queuing', async () => {
+  it('returns 202 Accepted with existing Event + deliveries on Redis idempotent replay or PostgreSQL P2002 race without re-queuing', async () => {
     const workspaceId = randomUUID();
     const eventId = randomUUID();
     const deliveryId = randomUUID();
@@ -363,19 +363,16 @@ describe('IngestionService & EventsController', () => {
       ],
     };
 
-    // Case 1: Redis SET NX returns false -> returns existing DB record with 200 OK
+    // Case 1: Redis SET NX returns false -> returns existing DB record under @HttpCode(202 Accepted)
     setNxExMock.mockResolvedValueOnce(false);
     eventFindFirstMock.mockResolvedValueOnce(storedEventWithDeliveries);
 
-    const mockRes = { status: vi.fn() } as unknown as Response;
     const replay = await controller.ingestEvent(
       workspaceId,
       { event: 'order.paid', payload: { orderId: 'ord_1' } },
       'dup-key-1',
-      mockRes,
     );
 
-    expect(mockRes.status).toHaveBeenCalledWith(HttpStatus.OK);
     expect(replay.idempotentReplay).toBe(true);
     expect(replay.eventId).toBe(eventId);
     expect(replay.deliveries[0]?.status).toBe(DeliveryStatus.DELIVERED);

@@ -180,7 +180,11 @@ describe('DeliveryProcessor (@Processor("deliveries"))', () => {
     const sendResult: ProviderSendResult = {
       provider: IntegrationProvider.MAILGUN,
       statusCode: 200,
-      responseBody: '{"id":"<msg@mg.kestrelmq.io>"}',
+      responseBody: JSON.stringify({
+        id: '<msg@mg.kestrelmq.io>',
+        upstreamSecret: sensitivePayloadToken,
+        email: 'customer@kestrelmq.io',
+      }),
       durationMs: 84,
     };
     providerSendMock.mockResolvedValueOnce(sendResult);
@@ -203,6 +207,7 @@ describe('DeliveryProcessor (@Processor("deliveries"))', () => {
       data: {
         attemptNumber: number;
         responseStatus: number;
+        responseBody: string | null;
         errorMessage: string | null;
         requestPayload: { payload: { resetToken: string } };
       };
@@ -211,6 +216,11 @@ describe('DeliveryProcessor (@Processor("deliveries"))', () => {
     expect(attemptData.data.responseStatus).toBe(200);
     expect(attemptData.data.errorMessage).toBeNull();
     expect(attemptData.data.requestPayload.payload.resetToken).toBe(REDACTED_VALUE);
+    expect(JSON.parse(attemptData.data.responseBody!)).toEqual({
+      id: '<msg@mg.kestrelmq.io>',
+      upstreamSecret: REDACTED_VALUE,
+      email: REDACTED_VALUE,
+    });
 
     expect(deliveryUpdateMock).toHaveBeenCalledWith({
       where: { id: deliveryId },
